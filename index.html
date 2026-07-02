@@ -1,0 +1,1711 @@
+<script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2/dist/umd/supabase.min.js"></script>
+<div id="app" style="font-family: 'Inter', system-ui, sans-serif; max-width: 720px; margin: 0 auto;">
+  <div id="loading" style="padding: 3rem 0; text-align: center; color: #6b7a73;">Đang tải dữ liệu nhóm...</div>
+  <div id="root" style="display:none;"></div>
+</div>
+
+<style>
+  @import url('https://fonts.googleapis.com/css2?family=Oswald:wght@500;600&family=Inter:wght@400;500;600&display=swap');
+  #app * { box-sizing: border-box; }
+  #app h1, #app h2, #app h3 { font-family: 'Oswald', sans-serif; letter-spacing: 0.01em; margin: 0; }
+  .bc-card { background: #FFFFFF; border: 1px solid #E3E0D6; border-radius: 12px; padding: 1rem 1.1rem; margin-bottom: 0.75rem; }
+  .bc-btn { font-family: 'Inter', sans-serif; border: 1px solid #1B4332; background: #1B4332; color: #F4F1EA; padding: 8px 16px; border-radius: 8px; font-size: 14px; font-weight: 500; cursor: pointer; }
+  .bc-btn:hover { background: #143226; }
+  .bc-btn.outline { background: transparent; color: #1B4332; }
+  .bc-btn.outline:hover { background: #EFEDE3; }
+  .bc-btn.danger { background: transparent; color: #993C1D; border-color: #993C1D; }
+  .bc-btn.danger:hover { background: #FAECE7; }
+  .bc-btn.small { padding: 5px 10px; font-size: 13px; }
+  .bc-btn:disabled { opacity: 0.45; cursor: not-allowed; }
+  .bc-input, .bc-select { font-family: 'Inter', sans-serif; border: 1px solid #D8D4C6; border-radius: 8px; padding: 8px 10px; font-size: 14px; width: 100%; background: #FFFDF9; color: #2C2C2A; }
+  .bc-input:focus, .bc-select:focus { outline: none; border-color: #1B4332; }
+  .bc-tab { padding: 8px 14px; border-radius: 999px; font-size: 14px; font-weight: 500; cursor: pointer; border: 1px solid transparent; color: #6b7a73; }
+  .bc-tab.active { background: #1B4332; color: #F4F1EA; }
+  .bc-badge { display:inline-block; font-size: 12px; padding: 2px 9px; border-radius: 999px; font-weight: 500; }
+  .bc-empty { text-align:center; padding: 2rem 1rem; color: #8a877d; font-size: 14px; }
+  .bc-err { font-size: 13px; color: #993C1D; margin-top: 6px; }
+</style>
+
+<script>
+(function(){
+  const LEVELS = ["Mới chơi", "Trung bình", "Khá", "Giỏi"];
+  const LEVEL_COLOR = { "Mới chơi": ["#EAF3DE","#27500A"], "Trung bình": ["#E6F1FB","#0C447C"], "Khá": ["#FAEEDA","#854F0B"], "Giỏi": ["#FAECE7","#993C1D"] };
+  const PROTECTED_USERNAME = 'kietdmt';
+  function isProtected(m){ return normUsername(m.username||'') === PROTECTED_USERNAME; }
+  function canResetProtected(){ return state.me && (normUsername(state.me.username||'') === PROTECTED_USERNAME || state.me.role === 'admin'); }
+  const MONTH_NAMES = ["Th1","Th2","Th3","Th4","Th5","Th6","Th7","Th8","Th9","Th10","Th11","Th12"];
+  const ROLE_LABEL = { admin: "Admin", r1: "R1", r2: "R2" };
+  const ROLE_COLOR = { admin: ["#FAECE7","#993C1D"], r1: ["#FAEEDA","#854F0B"], r2: ["#F1EFE8","#444441"] };
+
+  function monthKey(d){ d = d || new Date(); return d.getFullYear() + '-' + String(d.getMonth()+1).padStart(2,'0'); }
+  function monthLabel(key){ const [y,m] = key.split('-'); return MONTH_NAMES[parseInt(m,10)-1] + '/' + y; }
+  function sessionMonthKey(s){ return (s.date || '').slice(0,7) || monthKey(); }
+  function uid(){ return Date.now().toString(36) + Math.random().toString(36).slice(2,7); }
+  function escapeHtml(s){ return (s||'').replace(/[&<>"']/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c])); }
+  function normEmail(e){ return (e||'').trim().toLowerCase(); }
+  function normUsername(u){ return (u||'').trim().toLowerCase().replace(/\s+/g,''); }
+  function el(html){ const t = document.createElement('template'); t.innerHTML = html.trim(); return t.content.firstChild; }
+  function formatVND(n, signed){
+    n = Math.round(n || 0);
+    const abs = Math.abs(n).toLocaleString('vi-VN');
+    if (signed) return (n >= 0 ? '+' : '-') + abs + 'đ';
+    return abs + 'đ';
+  }
+  function formatDate(d){ if (!d) return ''; const p = d.split('-'); return p.length === 3 ? `${p[2]}/${p[1]}/${p[0]}` : d; }
+  const WEEKDAYS = ["Chủ nhật","Thứ 2","Thứ 3","Thứ 4","Thứ 5","Thứ 6","Thứ 7"];
+  function weekdayLabel(d){ if (!d) return ''; const dt = new Date(d + 'T00:00:00'); return isNaN(dt) ? '' : WEEKDAYS[dt.getDay()]; }
+  function formatTimeRange(start, end){ return end ? `${start} - ${end}` : start; }
+
+  let state = {
+    members: [], courts: [], sessions: [], settings: { casualMultiplier: 1.5, logoUrl: '', bannerUrl: '' },
+    payments: {}, fund: {}, donations: [],
+    me: null, myUsername: null, tab: 'sessions', memberFilter: 'all', viewMonth: monthKey(),
+    authMode: 'login', authError: '', remember: false,
+    sessionSearchDate: '', sessionSearchCourt: '', pastVisibleCount: 3,
+    memberSearch: '', memberVisibleCount: 15,
+    saveError: null, rememberData: null,
+    upcomingPage: 0, pastExpanded: false, pastPage: 0
+  };
+
+  // ---------- Quyền ----------
+  function role(){ return state.me ? state.me.role : null; }
+  function isAdmin(){ return role() === 'admin'; }
+  function canManage(){ return role() === 'admin' || role() === 'r1'; } // tạo/sửa, không xoá
+  function canDelete(){ return isAdmin(); } // chỉ admin được xoá
+
+  // ---------- Lưu trữ ----------
+  // !!! DÁN URL VÀ ANON KEY CỦA SUPABASE VÀO 2 DÒNG DƯỚI ĐÂY TRƯỚC KHI ĐĂNG LÊN GITHUB !!!
+  const SUPABASE_URL = "https://mqyfdhpemocwzuujwpkx.supabase.co";
+  const SUPABASE_ANON_KEY = "sb_publishable_HLs1Db6BSmXTwvlNt7FqrQ_jdDmJkZ_";
+  const sb = window.supabase.createClient(SUPABASE_URL, SUPABASE_ANON_KEY);
+
+  function showSaveError(key){
+    state.saveError = 'Không lưu được dữ liệu (' + key + '). Kiểm tra lại kết nối mạng hoặc cấu hình Supabase, vui lòng thử lại.';
+    render();
+  }
+  async function save(key, val, attempt){
+    attempt = attempt || 1;
+    const json = JSON.stringify(val);
+    if (json.length > 4500000) { showSaveError(key + ' (dữ liệu quá lớn, ảnh logo/banner nên dưới ~1MB)'); return false; }
+    try {
+      const { error } = await sb.from('bc_data').upsert({ key, value: val });
+      if (error) throw error;
+      state.saveError = null;
+      return true;
+    } catch(e) {
+      console.error('Lưu thất bại', key, e);
+      if (attempt < 3) {
+        await new Promise(res => setTimeout(res, 600 * attempt));
+        return save(key, val, attempt + 1);
+      }
+      showSaveError(key);
+      return false;
+    }
+  }
+  async function loadKey(key, fallback){
+    try {
+      const { data, error } = await sb.from('bc_data').select('value').eq('key', key).maybeSingle();
+      if (error) throw error;
+      return data ? data.value : fallback;
+    } catch(e) { console.error('Đọc thất bại', key, e); return fallback; }
+  }
+  const saveMembers = () => save('bc_members', state.members);
+  const saveCourts = () => save('bc_courts', state.courts);
+  const saveSessions = () => save('bc_sessions', state.sessions);
+  const saveSettings = () => save('bc_settings', state.settings);
+  const savePayments = () => save('bc_payments', state.payments);
+  const saveFund = () => save('bc_fund', state.fund);
+  const saveDonations = () => save('bc_donations', state.donations);
+
+  // Luôn lấy bản mới nhất từ database trước khi sửa danh sách thành viên,
+  // để tránh 2 người sửa/đăng ký cùng lúc ghi đè làm mất dữ liệu của nhau.
+  // mutator(latestList) trả về list mới để lưu, hoặc null để hủy (ví dụ validate lỗi).
+  let paymentsMutating = false;
+  async function mutatePayments(mutator){
+    while (paymentsMutating) { await new Promise(r => setTimeout(r, 150)); }
+    paymentsMutating = true;
+    try {
+      const latest = await loadKey('bc_payments', state.payments || {});
+      const updated = mutator(latest);
+      if (updated === null) return false;
+      state.payments = updated;
+      return await save('bc_payments', updated);
+    } finally { paymentsMutating = false; }
+  }
+  let fundMutating = false;
+  async function mutateFund(mutator){
+    while (fundMutating) { await new Promise(r => setTimeout(r, 150)); }
+    fundMutating = true;
+    try {
+      const latest = await loadKey('bc_fund', state.fund || {});
+      const updated = mutator(latest);
+      if (updated === null) return false;
+      state.fund = updated;
+      return await save('bc_fund', updated);
+    } finally { fundMutating = false; }
+  }
+  let donationsMutating = false;
+  async function mutateDonations(mutator){
+    while (donationsMutating) { await new Promise(r => setTimeout(r, 150)); }
+    donationsMutating = true;
+    try {
+      const latest = await loadKey('bc_donations', state.donations || []);
+      const updated = mutator(latest);
+      if (updated === null) return false;
+      state.donations = updated;
+      return await save('bc_donations', updated);
+    } finally { donationsMutating = false; }
+  }
+  let membersMutating = false;
+  async function mutateMembers(mutator){
+    while (membersMutating) { await new Promise(r => setTimeout(r, 150)); }
+    membersMutating = true;
+    try {
+      const latest = await loadKey('bc_members', state.members || []);
+      const updated = mutator(latest);
+      if (updated === null) return false;
+      state.members = updated;
+      resolveMe();
+      const ok = await save('bc_members', updated);
+      return ok;
+    } finally {
+      membersMutating = false;
+    }
+  }
+
+  // Dữ liệu riêng từng máy (đăng nhập, nhớ mật khẩu) lưu bằng localStorage của trình duyệt
+  function lsGet(key){ try { const v = localStorage.getItem(key); return v ? JSON.parse(v) : null; } catch(e){ return null; } }
+  function lsSet(key, val){ try { localStorage.setItem(key, JSON.stringify(val)); } catch(e){} }
+  const saveMyUsername = () => lsSet('bc_my_username', state.myUsername);
+  const saveRemember = (data) => lsSet('bc_remember', data);
+
+  async function loadAll(){
+    state.members = await loadKey('bc_members', []);
+    state.courts = await loadKey('bc_courts', []);
+    state.sessions = await loadKey('bc_sessions', []);
+    state.settings = Object.assign({ casualMultiplier: 1.5, logoUrl: '', bannerUrl: '' }, await loadKey('bc_settings', {}));
+    state.payments = await loadKey('bc_payments', {});
+    state.fund = await loadKey('bc_fund', {});
+    state.donations = await loadKey('bc_donations', []);
+    state.myUsername = lsGet('bc_my_username');
+    state.rememberData = lsGet('bc_remember');
+    if (!state.myUsername && state.rememberData && state.rememberData.username) {
+      const found = state.members.find(m => normUsername(m.username) === normUsername(state.rememberData.username) && m.password === state.rememberData.password);
+      if (found) state.myUsername = found.username;
+    }
+    resolveMe();
+  }
+
+  function resolveMe(){
+    if (!state.myUsername) { state.me = null; return; }
+    const found = state.members.find(m => normUsername(m.username) === normUsername(state.myUsername));
+    // Không cho thành viên chưa được duyệt (pending) vào app
+    if (found && found.status === 'pending') { state.me = null; return; }
+    state.me = found || null;
+    if (!found) state.myUsername = null;
+  }
+
+  function memberType(name, mKey){
+    const m = state.members.find(x => x.name === name);
+    if (!m || !m.monthlyType) return 'casual';
+    return m.monthlyType[mKey] || 'casual';
+  }
+
+  function computeShares(s){
+    const mKey = sessionMonthKey(s);
+    const yesNames = Object.entries(s.votes).filter(([,v]) => v === 'yes').map(([name]) => name);
+    let fixedNames = yesNames.filter(n => memberType(n, mKey) === 'fixed');
+    let casualNames = yesNames.filter(n => memberType(n, mKey) !== 'fixed');
+
+    // Pass slot: cố định đã pass vẫn trả phí; vãng lai nhận pass MIỄN PHÍ
+    const passes = s.passes || {};
+    const freeNames = [];
+    Object.entries(passes).forEach(([fixedMemberId, casualMemberId]) => {
+      if (!casualMemberId) return;
+      const fixedMember = state.members.find(x => x.id === fixedMemberId);
+      const casualMember = state.members.find(x => x.id === casualMemberId);
+      if (fixedMember && !fixedNames.includes(fixedMember.name)) fixedNames.push(fixedMember.name);
+      if (casualMember) {
+        casualNames = casualNames.filter(n => n !== casualMember.name);
+        if (!freeNames.includes(casualMember.name)) freeNames.push(casualMember.name);
+      }
+    });
+
+    // --- Chế độ áp mức cố định (flat rate) ---
+    const fr = s.flatRate || {};
+    if (fr.enabled) {
+      const fixedShare = fr.fixed || 0;
+      const casualShare = fr.casual || 0;
+      const total = fixedNames.length * fixedShare + casualNames.length * casualShare;
+      return {
+        mode: 'flat',
+        total, fixedNames, casualNames, freeNames,
+        fixedShare, casualShare, multiplier: fixedShare > 0 ? (casualShare / fixedShare) : null,
+        passedFromNames: Object.keys(passes).map(fid => state.members.find(x => x.id === fid)?.name).filter(Boolean),
+        passedToNames: freeNames
+      };
+    }
+
+    // --- Chế độ chia chi phí (mặc định) ---
+    const costs = s.costs || { court: 0, water: 0, shuttle: 0, other: 0 };
+    const total = (costs.court||0) + (costs.water||0) + (costs.shuttle||0) + (costs.other||0);
+    const m = state.settings.casualMultiplier || 1.5;
+    const denom = fixedNames.length + m * casualNames.length;
+    const unit = denom > 0 ? total / denom : 0;
+    return {
+      mode: 'split',
+      total, fixedNames, casualNames, freeNames,
+      fixedShare: unit, casualShare: unit * m, multiplier: m,
+      passedFromNames: Object.keys(passes).map(fid => state.members.find(x => x.id === fid)?.name).filter(Boolean),
+      passedToNames: freeNames
+    };
+  }
+
+  // ---------- RENDER ROOT ----------
+  function render(){
+    const root = document.getElementById('root');
+    try {
+    root.innerHTML = '';
+    if (!state.me) {
+      root.appendChild(renderAuth());
+      return;
+    }
+    root.appendChild(renderHeader());
+    if (state.saveError) {
+      const errBanner = el(`<div class="bc-card" style="background:#FAECE7; border-color:#E3A693; color:#993C1D; font-size:13px; display:flex; justify-content:space-between; align-items:center; gap:8px;">
+        <span>⚠ ${escapeHtml(state.saveError)}</span>
+        <button class="bc-btn danger small" id="bc-dismiss-err">Đóng</button>
+      </div>`);
+      root.appendChild(errBanner);
+      setTimeout(() => { const b = document.getElementById('bc-dismiss-err'); if (b) b.onclick = () => { state.saveError = null; render(); }; }, 0);
+    }
+    root.appendChild(renderTabs());
+    if (state.tab === 'sessions') root.appendChild(renderSessions());
+    if (state.tab === 'members') root.appendChild(renderMembers());
+    if (state.tab === 'courts') root.appendChild(renderCourts());
+    if (state.tab === 'fund') root.appendChild(renderFund());
+    if (state.tab === 'approve') root.appendChild(renderApprove());
+    } catch(err) {
+      console.error('Render error:', err);
+      root.innerHTML = '';
+      const errDiv = document.createElement('div');
+      errDiv.style.cssText = 'padding:2rem; background:#FAECE7; border-radius:12px; margin:1rem; font-family:monospace; font-size:13px; color:#993C1D;';
+      errDiv.innerHTML = '<strong>Lỗi hiển thị:</strong><br>' + err.message + '<br><br><small>' + (err.stack||'').split('\n').slice(0,4).join('<br>') + '</small><br><br><button onclick="window.location.reload()" style="padding:8px 16px; background:#1B4332; color:#fff; border:none; border-radius:8px; cursor:pointer;">Tải lại trang</button>';
+      root.appendChild(errDiv);
+    }
+  }
+
+  // ---------- AUTH ----------
+  function renderAuth(){
+    const wrap = el(`<div style="max-width:420px; margin:1.5rem auto;"></div>`);
+
+    if (state.settings.bannerUrl) {
+      wrap.appendChild(el(`<img src="${state.settings.bannerUrl}" style="width:100%; height:120px; object-fit:cover; border-radius:12px; margin-bottom:12px;" />`));
+    }
+    const head = el(`<div style="text-align:center; margin-bottom:1rem;"></div>`);
+    if (state.settings.logoUrl) {
+      head.appendChild(el(`<img src="${state.settings.logoUrl}" style="width:64px; height:64px; object-fit:cover; border-radius:50%; margin-bottom:8px;" />`));
+    }
+    head.appendChild(el(`<h1 style="font-size:20px; color:#1B4332;">Hội cầu lông</h1>`));
+    head.appendChild(el(`<p style="font-size:13px; color:#8a877d; margin-top:4px;">Đăng nhập bằng email và mật khẩu để vote, đăng ký lịch và xem chi phí.</p>`));
+    wrap.appendChild(head);
+
+    if (state.authMode === 'pending_notice') {
+      wrap.appendChild(el(`<div class="bc-card" style="text-align:center; padding:2rem 1rem;">
+        <div style="font-size:2.5rem; margin-bottom:12px;">⏳</div>
+        <h3 style="font-size:16px; color:#1B4332; margin-bottom:8px;">Đăng ký thành công!</h3>
+        <p style="font-size:14px; color:#6b7a73; margin-bottom:16px;">Tài khoản của bạn đang chờ <strong>Admin hoặc R1</strong> phê duyệt.<br>Sau khi được duyệt, bạn có thể đăng nhập và sử dụng app bình thường.</p>
+        <button class="bc-btn outline small" id="back-to-login">Quay lại đăng nhập</button>
+      </div>`));
+      setTimeout(() => { document.getElementById('back-to-login').onclick = () => { state.authMode = 'login'; render(); }; }, 0);
+      return wrap;
+    }
+
+    const tabs = el(`<div style="display:flex; gap:6px; justify-content:center; margin-bottom:1rem;">
+      <div class="bc-tab ${state.authMode==='login'?'active':''}" data-mode="login">Đăng nhập</div>
+      <div class="bc-tab ${state.authMode==='register'?'active':''}" data-mode="register">Đăng ký mới</div>
+    </div>`);
+    wrap.appendChild(tabs);
+
+    const card = el(`<div class="bc-card"></div>`);
+    if (state.authMode === 'login') {
+      const remUsername = (state.rememberData && state.rememberData.username) || '';
+      card.appendChild(el(`<div style="display:flex; flex-direction:column; gap:8px;">
+        <input class="bc-input" id="auth-username" placeholder="Tên đăng nhập (username)" value="${escapeHtml(remUsername)}" />
+        <input class="bc-input" id="auth-password" type="password" placeholder="Mật khẩu" />
+        <label style="display:flex; align-items:center; gap:6px; font-size:13px; color:#6b7a73;">
+          <input type="checkbox" id="auth-remember" ${state.rememberData ? 'checked' : ''} /> Nhớ đăng nhập trên máy này
+        </label>
+        <button class="bc-btn" id="auth-login-btn">Đăng nhập</button>
+        ${state.authError ? `<div class="bc-err">${escapeHtml(state.authError)}</div>` : ''}
+        <div style="font-size:12px; color:#8a877d; margin-top:4px;">Quên mật khẩu? Nhờ Admin reset lại ở tab Thành viên. Chưa có tài khoản? Bấm "Đăng ký mới".</div>
+      </div>`));
+    } else {
+      const atLimit = state.members.length >= MAX_MEMBERS;
+      card.appendChild(el(`<div style="display:flex; flex-direction:column; gap:8px;">
+        ${atLimit ? `<div class="bc-err">Nhóm đã đạt giới hạn ${MAX_MEMBERS} thành viên, liên hệ Admin để được thêm.</div>` : ''}
+        <input class="bc-input" id="auth-name" placeholder="Họ tên" ${atLimit?'disabled':''} />
+        <input class="bc-input" id="auth-username2" placeholder="Tên đăng nhập (username, không dấu cách)" ${atLimit?'disabled':''} />
+        <input class="bc-input" id="auth-email2" type="email" placeholder="Email của bạn" ${atLimit?'disabled':''} />
+        <input class="bc-input" id="auth-phone" placeholder="SĐT (tuỳ chọn)" ${atLimit?'disabled':''} />
+        <select class="bc-select" id="auth-level" ${atLimit?'disabled':''}>${LEVELS.map(l=>`<option>${l}</option>`).join('')}</select>
+        <input class="bc-input" id="auth-pw1" type="password" placeholder="Đặt mật khẩu (tối thiểu 4 ký tự)" ${atLimit?'disabled':''} />
+        <input class="bc-input" id="auth-pw2" type="password" placeholder="Nhập lại mật khẩu" ${atLimit?'disabled':''} />
+        <button class="bc-btn" id="auth-register-btn" ${atLimit?'disabled':''}>Đăng ký</button>
+        ${state.authError ? `<div class="bc-err">${escapeHtml(state.authError)}</div>` : ''}
+        <div style="font-size:12px; color:#8a877d; margin-top:4px;">${state.members.length === 0 ? 'Bạn là người đầu tiên đăng ký sẽ tự động là Admin.' : 'Tài khoản mới mặc định ở vai trò R2 (tự vote và đăng ký tháng).'}</div>
+      </div>`));
+    }
+    wrap.appendChild(card);
+
+    setTimeout(() => {
+      tabs.querySelectorAll('[data-mode]').forEach(n => n.onclick = () => { state.authMode = n.dataset.mode; state.authError = ''; render(); });
+      const loginBtn = document.getElementById('auth-login-btn');
+      if (loginBtn) loginBtn.onclick = async () => {
+        const username = normUsername(document.getElementById('auth-username').value);
+        const password = document.getElementById('auth-password').value;
+        const remember = document.getElementById('auth-remember').checked;
+        if (!username || !password) { state.authError = 'Nhập tên đăng nhập và mật khẩu.'; render(); return; }
+        state.members = await loadKey('bc_members', state.members);
+        const found = state.members.find(m => normUsername(m.username) === username);
+        if (!found) { state.authError = 'Không tìm thấy tên đăng nhập này.'; render(); return; }
+        if (found.password !== password) { state.authError = 'Sai mật khẩu.'; render(); return; }
+        if (found.status === 'pending') { state.authError = '⏳ Tài khoản của bạn đang chờ Admin/R1 phê duyệt. Vui lòng chờ và thử lại sau.'; render(); return; }
+        state.myUsername = found.username; state.authError = ''; saveMyUsername();
+        if (remember) { state.rememberData = { username: found.username, password }; saveRemember(state.rememberData); }
+        else { state.rememberData = null; saveRemember(null); }
+        resolveMe(); render();
+      };
+      const regBtn = document.getElementById('auth-register-btn');
+      if (regBtn) regBtn.onclick = async () => {
+        if (state.members.length >= MAX_MEMBERS) return;
+        const name = document.getElementById('auth-name').value.trim();
+        const username = normUsername(document.getElementById('auth-username2').value);
+        const email = normEmail(document.getElementById('auth-email2').value);
+        const phone = document.getElementById('auth-phone').value.trim();
+        const level = document.getElementById('auth-level').value;
+        const pw1 = document.getElementById('auth-pw1').value;
+        const pw2 = document.getElementById('auth-pw2').value;
+        if (!name || !username || !email) { state.authError = 'Nhập đầy đủ họ tên, tên đăng nhập và email.'; render(); return; }
+        if (!/^[a-z0-9_.]+$/.test(username)) { state.authError = 'Tên đăng nhập chỉ gồm chữ, số, dấu chấm/gạch dưới, không dấu cách.'; render(); return; }
+        if (!pw1 || pw1.length < 4) { state.authError = 'Mật khẩu cần ít nhất 4 ký tự.'; render(); return; }
+        if (pw1 !== pw2) { state.authError = 'Hai mật khẩu không khớp.'; render(); return; }
+        let regError = '';
+        const ok = await mutateMembers(latest => {
+          if (latest.some(m => normUsername(m.username) === username)) { regError = 'Tên đăng nhập này đã được dùng, hãy chọn tên khác.'; return null; }
+          if (latest.some(m => normEmail(m.email) === email)) { regError = 'Email này đã đăng ký, hãy chọn Đăng nhập.'; return null; }
+          if (latest.length >= MAX_MEMBERS) { regError = 'Nhóm đã đạt giới hạn ' + MAX_MEMBERS + ' thành viên.'; return null; }
+          const isFirst = latest.length === 0;
+          const isKiet = username === PROTECTED_USERNAME;
+          const newMember = {
+            id: uid(), name, username, email, phone, level, password: pw1,
+            status: (isFirst || isKiet) ? 'active' : 'pending',
+            role: (isFirst || isKiet) ? 'admin' : 'r2',
+            monthlyType: {}, avatarUrl: ''
+          };
+          return latest.concat([newMember]);
+        });
+        if (!ok) { state.authError = regError || 'Đăng ký thất bại, vui lòng thử lại.'; render(); return; }
+        const newMe = state.members.find(m => normUsername(m.username) === username);
+        if (newMe && newMe.status === 'pending') {
+          state.myUsername = null; saveMyUsername();
+          state.authError = '';
+          state.authMode = 'pending_notice';
+          render(); return;
+        }
+        state.myUsername = username; state.authError = ''; saveMyUsername(); resolveMe(); render();
+      };
+    }, 0);
+
+    return wrap;
+  }
+
+  // ---------- HEADER ----------
+  function renderHeader(){
+    const [bg, fg] = ROLE_COLOR[state.me.role] || ["#F1EFE8","#444441"];
+    const wrap = el(`<div style="display:flex; align-items:center; justify-content:space-between; margin-bottom:1rem; flex-wrap:wrap; gap:8px;">
+      <div>
+        <h1 style="font-size:20px; color:#1B4332;">Hội cầu lông</h1>
+        <p style="font-size:13px; color:#8a877d; margin:2px 0 0;">${state.members.filter(m=>m.status==='active').length}/${MAX_MEMBERS} thành viên hoạt động · ${state.courts.length} sân đã lưu</p>
+      </div>
+      <div style="display:flex; align-items:center; gap:8px;">
+        <span class="bc-badge" style="background:${bg}; color:${fg};">${escapeHtml(state.me.name)} · ${ROLE_LABEL[state.me.role]}</span>
+        <button class="bc-btn outline small" id="bc-refresh" title="Tải lại dữ liệu mới nhất">⟳ Làm mới</button>
+        <button class="bc-btn outline small" id="bc-logout">Đăng xuất</button>
+      </div>
+    </div>`);
+    setTimeout(() => {
+      document.getElementById('bc-logout').onclick = () => { state.myUsername = null; state.me = null; saveMyUsername(); render(); };
+      const refreshBtn = document.getElementById('bc-refresh');
+      refreshBtn.onclick = async () => {
+        refreshBtn.textContent = 'Đang tải...';
+        await refreshAll();
+      };
+    }, 0);
+    return wrap;
+  }
+
+  function renderTabs(){
+    const wrap = el(`<div style="display:flex; gap:6px; margin-bottom:1rem; border-bottom:1px solid #E3E0D6; padding-bottom:0.75rem;"></div>`);
+    const tabs = [['sessions','Lịch đánh'],['members','Thành viên'],['courts','Sân cầu'],['fund','Quỹ & chi phí']];
+    if (canManage()) tabs.push(['approve','Duyệt thành viên']);
+    tabs.forEach(([key,label]) => {
+      const pendingCount = key === 'approve' ? state.members.filter(m => m.status === 'pending').length : 0;
+      const badgeHtml = pendingCount > 0 ? ` <span style="background:#993C1D; color:#fff; font-size:11px; padding:1px 6px; border-radius:999px;">${pendingCount}</span>` : '';
+      const t = el(`<div class="bc-tab ${state.tab===key?'active':''}">${label}${badgeHtml}</div>`);
+      t.onclick = () => { state.tab = key; render(); refreshAll(); };
+      wrap.appendChild(t);
+    });
+    return wrap;
+  }
+
+  // ---------- MEMBERS ----------
+  function renderMembers(){
+    const wrap = el(`<div></div>`);
+    if (!canManage()) {
+      // R2: chỉ thấy thông tin của chính mình, không thấy thành viên khác
+      wrap.appendChild(el(`<div style="font-size:12px; color:#8a877d; margin-bottom:0.5rem;">Bạn đang ở vai trò R2: chỉ thấy thông tin của chính mình. Tự đăng ký Cố định/Vãng lai theo từng tháng ở dưới.</div>`));
+      const selfMonth = el(`<div style="display:flex; align-items:center; gap:6px; margin-bottom:0.75rem;">
+        <span style="font-size:13px; color:#8a877d;">Tháng xem:</span>
+        <input class="bc-input" type="month" id="mb-view-month-self" value="${state.viewMonth}" style="width:140px; padding:4px 8px;" />
+      </div>`);
+      wrap.appendChild(selfMonth);
+      const myRow = state.members.find(m => state.me && m.id === state.me.id);
+      if (myRow) wrap.appendChild(renderMemberRow(myRow));
+      setTimeout(() => {
+        document.getElementById('mb-view-month-self').onchange = (e) => { state.viewMonth = e.target.value || monthKey(); render(); };
+      }, 0);
+      return wrap;
+    }
+
+    const activeCount = state.members.filter(m=>m.status==='active').length;
+    const inactiveCount = state.members.length - activeCount;
+    const registeredThisMonth = state.members.filter(m => (m.monthlyType||{})[state.viewMonth] === 'fixed').length;
+
+    wrap.appendChild(el(`<div class="bc-card" style="background:#F4F1EA; display:flex; gap:18px; flex-wrap:wrap; font-size:13px; color:#6b7a73;">
+      <span><strong style="color:#1B4332; font-weight:500;">${state.members.length}/${MAX_MEMBERS}</strong> tổng</span>
+      <span><strong style="color:#27500A; font-weight:500;">${activeCount}</strong> hoạt động</span>
+      <span><strong style="color:#993C1D; font-weight:500;">${inactiveCount}</strong> ngưng hoạt động</span>
+      <span><strong style="color:#1B4332; font-weight:500;">${registeredThisMonth}</strong> đăng ký cố định ${monthLabel(state.viewMonth)}</span>
+    </div>`));
+
+    // Quản lý vai trò/trạng thái chỉ R1/Admin thấy form thêm thủ công (vẫn nên khuyến khích tự đăng ký)
+    if (canManage()) {
+      const atLimit = state.members.length >= MAX_MEMBERS;
+      const form = el(`<div class="bc-card">
+        <h3 style="font-size:15px; margin-bottom:10px; color:#1B4332;">Thêm thành viên (thay họ, nếu họ không tự đăng ký được)</h3>
+        ${atLimit ? `<div class="bc-err">Đã đạt giới hạn ${MAX_MEMBERS} thành viên.</div>` : ''}
+        <div style="display:flex; gap:8px; flex-wrap:wrap;">
+          <input class="bc-input" id="mb-name" placeholder="Họ tên" style="flex:2; min-width:140px;" ${atLimit?'disabled':''} />
+          <input class="bc-input" id="mb-username" placeholder="Username" style="flex:1.2; min-width:120px;" ${atLimit?'disabled':''} />
+          <input class="bc-input" id="mb-email" type="email" placeholder="Email" style="flex:2; min-width:160px;" ${atLimit?'disabled':''} />
+          <select class="bc-select" id="mb-level" style="flex:1; min-width:120px;" ${atLimit?'disabled':''}>${LEVELS.map(l=>`<option>${l}</option>`).join('')}</select>
+          <input class="bc-input" id="mb-phone" placeholder="SĐT (tuỳ chọn)" style="flex:1; min-width:120px;" ${atLimit?'disabled':''} />
+          <button class="bc-btn" id="mb-add" ${atLimit?'disabled':''}>Thêm</button>
+        </div>
+      </div>`);
+      wrap.appendChild(form);
+      setTimeout(() => {
+        document.getElementById('mb-add').onclick = async () => {
+          if (state.members.length >= MAX_MEMBERS) return;
+          const name = document.getElementById('mb-name').value.trim();
+          const username = normUsername(document.getElementById('mb-username').value);
+          const email = normEmail(document.getElementById('mb-email').value);
+          if (!name || !username || !email) { alert('Nhập đầy đủ họ tên, username và email.'); return; }
+          const level = document.getElementById('mb-level').value;
+          const phone = document.getElementById('mb-phone').value.trim();
+          const tempPw = Math.random().toString(36).slice(2,8);
+          let err = '';
+          const ok = await mutateMembers(latest => {
+            if (latest.some(m => normUsername(m.username) === username)) { err = 'Username đã tồn tại.'; return null; }
+            if (latest.some(m => normEmail(m.email) === email)) { err = 'Email đã tồn tại.'; return null; }
+            if (latest.length >= MAX_MEMBERS) { err = 'Đã đạt giới hạn ' + MAX_MEMBERS + ' thành viên.'; return null; }
+            return latest.concat([{ id: uid(), name, username, email, phone, level, password: tempPw, status: 'active', role: 'r2', monthlyType: {}, avatarUrl: '' }]);
+          });
+          if (!ok) { alert(err || 'Thêm thất bại, thử lại.'); return; }
+          render();
+          alert(`Đã thêm ${name}. Mật khẩu tạm: ${tempPw} — báo cho họ để đăng nhập rồi đổi qua Admin reset nếu cần.`);
+        };
+      }, 0);
+    }
+
+    const filterBar = el(`<div style="display:flex; gap:6px; margin-bottom:0.75rem; flex-wrap:wrap; align-items:center;">
+      <div style="display:flex; gap:6px; flex-wrap:wrap;">
+        ${[['all','Tất cả'],['active','Hoạt động'],['inactive','Ngưng hoạt động']].map(([k,l]) =>
+          `<div class="bc-tab ${state.memberFilter===k?'active':''}" data-filter="${k}" style="font-size:13px; padding:5px 12px;">${l}</div>`).join('')}
+      </div>
+      <div style="margin-left:auto; display:flex; align-items:center; gap:6px; flex-wrap:wrap;">
+        <span style="font-size:13px; color:#8a877d;">Tháng xem:</span>
+        <input class="bc-input" type="month" id="mb-view-month" value="${state.viewMonth}" style="width:140px; padding:4px 8px;" />
+      </div>
+    </div>`);
+    wrap.appendChild(filterBar);
+
+    // Search thành viên theo tên — dùng nút bấm thay vì live search
+    const searchBar = el(`<div style="display:flex; gap:8px; align-items:center; margin-bottom:0.75rem; flex-wrap:wrap;">
+      <input class="bc-input" id="mb-search" placeholder="Nhập tên hoặc username..." value="${escapeHtml(state.memberSearch)}" style="max-width:280px;" />
+      <button class="bc-btn small" id="mb-search-btn">🔍 Tìm</button>
+      ${state.memberSearch ? `<button class="bc-btn outline small" id="mb-search-clear">✕ Xoá</button>` : ''}
+    </div>`);
+    wrap.appendChild(searchBar);
+
+    let filtered = state.members.filter(m => state.memberFilter === 'all' ? true : m.status === state.memberFilter);
+    if (state.memberSearch) {
+      const kw = state.memberSearch.toLowerCase();
+      filtered = filtered.filter(m => m.name.toLowerCase().includes(kw) || (m.username||'').toLowerCase().includes(kw));
+    }
+
+    const MPAGE = 12;
+    const totalPages = Math.max(1, Math.ceil(filtered.length / MPAGE));
+    if (state.memberVisibleCount > totalPages) state.memberVisibleCount = totalPages;
+    const page = Math.max(0, Math.min((state.memberVisibleCount||0), totalPages - 1));
+    const pageItems = filtered.slice().reverse().slice(page * MPAGE, (page + 1) * MPAGE);
+
+    if (filtered.length === 0) {
+      wrap.appendChild(el(`<div class="bc-empty">${state.memberSearch ? 'Không tìm thấy thành viên nào.' : 'Không có thành viên nào trong nhóm này.'}</div>`));
+    } else {
+      pageItems.forEach(m => wrap.appendChild(renderMemberRow(m)));
+      if (totalPages > 1) {
+        const paginator = el(`<div style="display:flex; align-items:center; justify-content:center; gap:8px; margin-top:0.5rem; font-size:13px; color:#6b7a73;"></div>`);
+        if (page > 0) {
+          const prev = el(`<button class="bc-btn outline small">◀ Trước</button>`);
+          prev.onclick = () => { state.memberVisibleCount = page - 1; render(); };
+          paginator.appendChild(prev);
+        }
+        paginator.appendChild(el(`<span>Trang ${page+1} / ${totalPages} (${filtered.length} thành viên)</span>`));
+        if (page < totalPages - 1) {
+          const next = el(`<button class="bc-btn outline small">Tiếp ▶</button>`);
+          next.onclick = () => { state.memberVisibleCount = page + 1; render(); };
+          paginator.appendChild(next);
+        }
+        wrap.appendChild(paginator);
+      }
+    }
+
+    setTimeout(() => {
+      document.getElementById('mb-view-month').onchange = (e) => { state.viewMonth = e.target.value || monthKey(); render(); };
+      filterBar.querySelectorAll('[data-filter]').forEach(n => n.onclick = () => { state.memberFilter = n.dataset.filter; state.memberVisibleCount = 0; render(); });
+      const mbSearch = document.getElementById('mb-search');
+      const mbSearchBtn = document.getElementById('mb-search-btn');
+      const doSearch = () => { state.memberSearch = document.getElementById('mb-search').value; state.memberVisibleCount = 0; render(); };
+      if (mbSearchBtn) mbSearchBtn.onclick = doSearch;
+      if (mbSearch) mbSearch.onkeydown = (e) => { if (e.key === 'Enter') doSearch(); };
+      const mbClear = document.getElementById('mb-search-clear');
+      if (mbClear) mbClear.onclick = () => { state.memberSearch = ''; state.memberVisibleCount = 0; render(); };
+    }, 0);
+
+    return wrap;
+  }
+
+  function avatarHtml(m, size){
+    size = size || 36;
+    if (m.avatarUrl) return `<img src="${m.avatarUrl}" style="width:${size}px; height:${size}px; border-radius:50%; object-fit:cover; flex-shrink:0;" />`;
+    const initial = (m.name||'?').trim().charAt(0).toUpperCase();
+    return `<div style="width:${size}px; height:${size}px; border-radius:50%; background:#E6F1FB; color:#0C447C; display:flex; align-items:center; justify-content:center; font-size:${Math.round(size*0.42)}px; font-weight:600; flex-shrink:0;">${initial}</div>`;
+  }
+
+  function renderMemberRow(m){
+    const [lbg, lfg] = LEVEL_COLOR[m.level] || ["#F1EFE8","#444441"];
+    const [rbg, rfg] = ROLE_COLOR[m.role] || ["#F1EFE8","#444441"];
+    const isSelf = state.me && state.me.id === m.id;
+    const editable = canManage() || isSelf; // ai sửa được loại đăng ký tháng của dòng này
+    const curType = (m.monthlyType||{})[state.viewMonth] || '';
+    const statusBg = m.status === 'active' ? '#EAF3DE' : '#FAECE7';
+    const statusFg = m.status === 'active' ? '#27500A' : '#993C1D';
+
+    const row = el(`<div class="bc-card" style="padding:0.7rem 1rem;">
+      <div style="display:flex; align-items:flex-start; justify-content:space-between; flex-wrap:wrap; gap:6px;">
+        <div style="display:flex; gap:10px; align-items:flex-start;">
+          <div id="avatar-box-${m.id}"></div>
+          <div>
+            <span style="font-weight:500; font-size:14px;">${escapeHtml(m.name)}</span>
+            ${isSelf ? `<span class="bc-badge" style="background:#E6F1FB; color:#0C447C; margin-left:6px;">Bạn</span>` : ''}
+            <span class="bc-badge" style="background:${lbg}; color:${lfg}; margin-left:6px;">${m.level}</span>
+            <span class="bc-badge" style="background:${rbg}; color:${rfg}; margin-left:6px;">${ROLE_LABEL[m.role]}</span>
+            <span class="bc-badge" style="background:${statusBg}; color:${statusFg}; margin-left:6px;">${m.status === 'active' ? 'Hoạt động' : 'Ngưng hoạt động'}</span>
+            <div style="font-size:12px; color:#8a877d; margin-top:3px;">@${escapeHtml(m.username || '')} · ${escapeHtml(m.email)}${m.phone ? ' · ' + escapeHtml(m.phone) : ''}</div>
+            ${isSelf ? `<div style="margin-top:6px;"><input type="file" accept="image/*" id="avatar-input-${m.id}" style="font-size:12px;" /></div>` : ''}
+            ${isSelf ? `<div style="margin-top:8px; display:flex; gap:6px; flex-wrap:wrap; align-items:center;">
+              <input class="bc-input" type="password" id="pw-old-${m.id}" placeholder="Mật khẩu hiện tại" style="width:140px; padding:5px 8px;" />
+              <input class="bc-input" type="password" id="pw-new-${m.id}" placeholder="Mật khẩu mới" style="width:140px; padding:5px 8px;" />
+              <input class="bc-input" type="password" id="pw-new2-${m.id}" placeholder="Nhập lại" style="width:120px; padding:5px 8px;" />
+              <button class="bc-btn outline small" id="pw-change-${m.id}">Đổi mật khẩu</button>
+              <span id="pw-msg-${m.id}" style="font-size:12px;"></span>
+            </div>` : ''}
+          </div>
+        </div>
+        <div style="display:flex; gap:6px; align-items:center;" id="row-actions-${m.id}"></div>
+      </div>
+      <div style="margin-top:8px; display:flex; align-items:center; gap:8px; flex-wrap:wrap;">
+        <span style="font-size:12px; color:#8a877d;">Đăng ký ${monthLabel(state.viewMonth)}:</span>
+        <select class="bc-select" id="type-${m.id}" style="width:170px; padding:5px 8px;" ${editable?'':'disabled'}>
+          <option value="" ${curType===''?'selected':''}>Chưa đăng ký</option>
+          <option value="fixed" ${curType==='fixed'?'selected':''}>Cố định</option>
+          <option value="casual" ${curType==='casual'?'selected':''}>Vãng lai</option>
+        </select>
+      </div>
+    </div>`);
+
+    row.querySelector(`#avatar-box-${m.id}`).innerHTML = avatarHtml(m, 36);
+
+    const actions = row.querySelector(`#row-actions-${m.id}`);
+    const protected_ = isProtected(m);
+
+    if (canManage() && !protected_) {
+      const statusBtn = el(`<button class="bc-btn outline small">${m.status==='active' ? 'Ngưng hoạt động' : 'Mở lại hoạt động'}</button>`);
+      statusBtn.onclick = async () => {
+        await mutateMembers(latest => latest.map(x => x.id === m.id ? Object.assign({}, x, { status: x.status === 'active' ? 'inactive' : 'active' }) : x));
+        render();
+      };
+      actions.appendChild(statusBtn);
+    }
+    if (isAdmin()) {
+      if (!protected_) {
+        const roleSel = el(`<select class="bc-select" style="width:90px; padding:5px 6px;">
+          <option value="r2" ${m.role==='r2'?'selected':''}>R2</option>
+          <option value="r1" ${m.role==='r1'?'selected':''}>R1</option>
+          <option value="admin" ${m.role==='admin'?'selected':''}>Admin</option>
+        </select>`);
+        roleSel.onchange = async (e) => {
+          const newRole = e.target.value;
+          const ok = await mutateMembers(latest => {
+            const target = latest.find(x => x.id === m.id);
+            if (!target) return null;
+            if (target.role === 'admin' && newRole !== 'admin') {
+              const otherAdmins = latest.filter(x => x.role === 'admin' && x.id !== m.id).length;
+              if (otherAdmins === 0) return null;
+            }
+            return latest.map(x => x.id === m.id ? Object.assign({}, x, { role: newRole }) : x);
+          });
+          if (!ok) alert('Không thể chuyển quyền: cần giữ ít nhất 1 thành viên Admin trong nhóm.');
+          render();
+        };
+        actions.appendChild(roleSel);
+      } else {
+        actions.appendChild(el(`<span class="bc-badge" style="background:#FAEEDA; color:#854F0B;">🔒 Admin cố định</span>`));
+      }
+
+      // Reset mật khẩu: với kietdmt chỉ cho phép chính họ hoặc admin khác
+      const canReset = !protected_ || canResetProtected();
+      if (canReset) {
+        const resetBtn = el(`<button class="bc-btn outline small">Reset mật khẩu</button>`);
+        resetBtn.onclick = async () => {
+          const newPw = prompt(`Đặt mật khẩu mới cho ${m.name}:`);
+          if (!newPw) return;
+          if (newPw.length < 4) { alert('Mật khẩu cần ít nhất 4 ký tự.'); return; }
+          await mutateMembers(latest => latest.map(x => x.id === m.id ? Object.assign({}, x, { password: newPw }) : x));
+          alert(`Đã đặt lại mật khẩu cho ${m.name}. Hãy báo mật khẩu mới cho họ.`);
+        };
+        actions.appendChild(resetBtn);
+      }
+
+      if (!protected_) {
+        const delBtn = el(`<button class="bc-btn danger small">Xoá</button>`);
+        delBtn.onclick = async () => {
+          if (!confirm(`Xoá thành viên ${m.name}?`)) return;
+          let blocked = false;
+          const ok = await mutateMembers(latest => {
+            const target = latest.find(x => x.id === m.id);
+            if (target && target.role === 'admin' && latest.filter(x => x.role === 'admin').length === 1) { blocked = true; return null; }
+            return latest.filter(x => x.id !== m.id);
+          });
+          if (blocked) { alert('Không thể xoá: đây là Admin duy nhất của nhóm.'); return; }
+          if (ok && state.me && state.me.id === m.id) { state.myUsername = null; state.me = null; saveMyUsername(); }
+          render();
+        };
+        actions.appendChild(delBtn);
+      }
+    }
+
+    setTimeout(() => {
+      const typeSel = document.getElementById(`type-${m.id}`);
+      if (typeSel && editable) typeSel.onchange = async (e) => {
+        const val = e.target.value;
+        await mutateMembers(latest => latest.map(x => {
+          if (x.id !== m.id) return x;
+          const mt = Object.assign({}, x.monthlyType || {});
+          if (val) mt[state.viewMonth] = val; else delete mt[state.viewMonth];
+          return Object.assign({}, x, { monthlyType: mt });
+        }));
+        render();
+      };
+      const avatarInput = document.getElementById(`avatar-input-${m.id}`);
+      if (avatarInput) avatarInput.onchange = (e) => {
+        const f = e.target.files[0]; if (!f) return;
+        if (f.size > 1500000) { alert('Ảnh quá lớn, chọn ảnh dưới ~1.5MB.'); return; }
+        const reader = new FileReader();
+        reader.onload = async () => {
+          const url = reader.result;
+          await mutateMembers(latest => latest.map(x => x.id === m.id ? Object.assign({}, x, { avatarUrl: url }) : x));
+          render();
+        };
+        reader.readAsDataURL(f);
+      };
+      const pwBtn = document.getElementById(`pw-change-${m.id}`);
+      if (pwBtn) pwBtn.onclick = async () => {
+        const msg = document.getElementById(`pw-msg-${m.id}`);
+        const oldPw = document.getElementById(`pw-old-${m.id}`).value;
+        const newPw = document.getElementById(`pw-new-${m.id}`).value;
+        const newPw2 = document.getElementById(`pw-new2-${m.id}`).value;
+        if (!oldPw || !newPw) { msg.style.color = '#993C1D'; msg.textContent = 'Nhập đủ thông tin.'; return; }
+        if (newPw.length < 4) { msg.style.color = '#993C1D'; msg.textContent = 'Mật khẩu mới cần ≥4 ký tự.'; return; }
+        if (newPw !== newPw2) { msg.style.color = '#993C1D'; msg.textContent = 'Mật khẩu mới không khớp.'; return; }
+        let err = '';
+        const ok = await mutateMembers(latest => {
+          const target = latest.find(x => x.id === m.id);
+          if (!target || target.password !== oldPw) { err = 'Sai mật khẩu hiện tại.'; return null; }
+          return latest.map(x => x.id === m.id ? Object.assign({}, x, { password: newPw }) : x);
+        });
+        if (!ok) { msg.style.color = '#993C1D'; msg.textContent = err || 'Đổi thất bại.'; return; }
+        if (state.rememberData && normUsername(state.rememberData.username) === normUsername(m.username)) {
+          state.rememberData = { username: m.username, password: newPw }; saveRemember(state.rememberData);
+        }
+        msg.style.color = '#27500A'; msg.textContent = 'Đã đổi mật khẩu thành công.';
+      };
+    }, 0);
+
+    return row;
+  }
+
+  // ---------- COURTS ----------
+  function renderCourts(){
+    const wrap = el(`<div></div>`);
+    if (canManage()) {
+      const form = el(`<div class="bc-card">
+        <h3 style="font-size:15px; margin-bottom:10px; color:#1B4332;">Thêm sân cầu</h3>
+        <div style="display:flex; flex-direction:column; gap:8px;">
+          <input class="bc-input" id="ct-name" placeholder="Tên sân" />
+          <input class="bc-input" id="ct-address" placeholder="Địa chỉ" />
+          <input class="bc-input" id="ct-maplink" placeholder="Link Google Maps (dán link chia sẻ từ Google Maps)" />
+          <div style="display:flex; gap:8px;">
+            <input class="bc-input" id="ct-price" placeholder="Giá / giờ (vd: 120.000đ)" />
+            <input class="bc-input" id="ct-phone" placeholder="SĐT liên hệ" />
+          </div>
+          <button class="bc-btn" id="ct-add" style="align-self:flex-start;">Thêm sân</button>
+        </div>
+      </div>`);
+      wrap.appendChild(form);
+      setTimeout(() => {
+        document.getElementById('ct-add').onclick = () => {
+          const name = document.getElementById('ct-name').value.trim();
+          if (!name) return;
+          state.courts.push({
+            id: uid(), name,
+            address: document.getElementById('ct-address').value.trim(),
+            mapLink: document.getElementById('ct-maplink').value.trim(),
+            price: document.getElementById('ct-price').value.trim(),
+            phone: document.getElementById('ct-phone').value.trim()
+          });
+          saveCourts(); render();
+        };
+      }, 0);
+    }
+
+    if (state.courts.length === 0) {
+      wrap.appendChild(el(`<div class="bc-empty">Chưa có sân nào được lưu.</div>`));
+    } else {
+      state.courts.slice().reverse().forEach(c => {
+        const row = el(`<div class="bc-card">
+          <div style="display:flex; justify-content:space-between; align-items:flex-start;">
+            <div>
+              <div style="font-weight:500; font-size:14px;">${escapeHtml(c.name)}</div>
+              <div style="font-size:13px; color:#6b7a73; margin-top:2px;">${escapeHtml(c.address || '')}</div>
+              <div style="font-size:13px; color:#8a877d; margin-top:2px;">${c.price ? 'Giá: ' + escapeHtml(c.price) : ''} ${c.phone ? ' · ĐT: ' + escapeHtml(c.phone) : ''}</div>
+              ${c.mapLink ? `<a href="${escapeHtml(c.mapLink)}" target="_blank" style="font-size:13px; color:#0C447C; margin-top:4px; display:inline-block;">📍 Xem trên Google Maps</a>` : ''}
+            </div>
+            ${canDelete() ? `<button class="bc-btn danger small" data-id="${c.id}">Xoá</button>` : ''}
+          </div>
+        </div>`);
+        if (canDelete()) row.querySelector('button').onclick = () => {
+          state.courts = state.courts.filter(x => x.id !== c.id);
+          saveCourts(); render();
+        };
+        wrap.appendChild(row);
+      });
+    }
+    return wrap;
+  }
+
+  // ---------- QUỸ & CHI PHÍ ----------
+  function computeMemberMonthSummary(month){
+    const result = {};
+    state.members.forEach(m => result[m.id] = { count: 0, owed: 0 });
+    state.sessions.filter(s => sessionMonthKey(s) === month).forEach(s => {
+      const shares = computeShares(s);
+      shares.fixedNames.forEach(name => {
+        const mem = state.members.find(x => x.name === name);
+        if (mem) { result[mem.id].count++; result[mem.id].owed += shares.fixedShare; }
+      });
+      shares.casualNames.forEach(name => {
+        const mem = state.members.find(x => x.name === name);
+        if (mem) { result[mem.id].count++; result[mem.id].owed += shares.casualShare; }
+      });
+    });
+    return result;
+  }
+
+  function prevMonthKey(month){
+    const [y,m] = month.split('-').map(Number);
+    const d = new Date(y, m-2, 1);
+    return monthKey(d);
+  }
+
+  function fundClosing(month){
+    const f = state.fund[month] || { opening: 0, expenses: [] };
+    let incomePaid = 0, incomePrepaid = 0;
+    state.members.forEach(m => {
+      const p = (state.payments[m.id] || {})[month] || {};
+      incomePaid += (p.paid || 0);
+      incomePrepaid += (p.prepaid || 0);
+    });
+    const incomeDonate = (state.donations||[]).filter(d => d.month === month).reduce((a,d) => a + (d.amount||0), 0);
+    const income = incomePaid + incomePrepaid + incomeDonate;
+    const expenseTotal = (f.expenses || []).reduce((a,e) => a + (e.amount||0), 0);
+    const sessionsCostTotal = state.sessions
+      .filter(s => sessionMonthKey(s) === month)
+      .reduce((a,s) => {
+        const c = s.costs || {};
+        return a + (c.court||0) + (c.water||0) + (c.shuttle||0) + (c.other||0);
+      }, 0);
+    return {
+      opening: f.opening || 0, incomePaid, incomePrepaid, incomeDonate,
+      income, expenseTotal, sessionsCostTotal,
+      diff: expenseTotal - sessionsCostTotal,
+      closing: (f.opening||0) + income - expenseTotal
+    };
+  }
+
+  function renderFund(){
+    const wrap = el(`<div></div>`);
+    const month = state.viewMonth;
+    const today = new Date().toISOString().slice(0,10);
+
+    wrap.appendChild(el(`<div style="display:flex; align-items:center; gap:6px; margin-bottom:1rem;">
+      <span style="font-size:13px; color:#8a877d;">Tháng xem:</span>
+      <input class="bc-input" type="month" id="fund-month" value="${month}" style="width:140px; padding:5px 8px;" />
+    </div>`));
+
+    const summary = computeMemberMonthSummary(month);
+    const rowsMembers = canManage() ? state.members : state.members.filter(m => state.me && m.id === state.me.id);
+    wrap.appendChild(el(`<h3 style="font-size:15px; color:#1B4332; margin-bottom:8px;">Tổng hợp chi phí thành viên · ${monthLabel(month)}</h3>`));
+    if (rowsMembers.length === 0) {
+      wrap.appendChild(el(`<div class="bc-empty">Không có dữ liệu.</div>`));
+    } else {
+      const tbl = el(`<div class="bc-card" style="overflow-x:auto;"><table style="width:100%; font-size:13px; border-collapse:collapse; min-width:560px;">
+        <tr style="color:#8a877d; text-align:left;">
+          <th style="padding:6px 4px;">Thành viên</th><th style="padding:6px 4px;">Buổi</th>
+          <th style="padding:6px 4px; text-align:right;">Phải trả</th><th style="padding:6px 4px; text-align:right;">Đã nộp</th>
+          <th style="padding:6px 4px; text-align:right;">Nộp trước</th><th style="padding:6px 4px; text-align:right;">Còn lại</th>
+        </tr>
+      </table></div>`);
+      const table = tbl.querySelector('table');
+      rowsMembers.forEach(m => {
+        const s = summary[m.id] || { count: 0, owed: 0 };
+        const p = (state.payments[m.id] || {})[month] || { paid: 0, prepaid: 0 };
+        const remaining = s.owed - (p.paid||0) - (p.prepaid||0);
+        const editable = canManage();
+        const tr = el(`<tr style="border-top:1px solid #F1EFE8;">
+          <td style="padding:6px 4px;">${escapeHtml(m.name)}</td>
+          <td style="padding:6px 4px;">${s.count}</td>
+          <td style="padding:6px 4px; text-align:right;">${formatVND(s.owed)}</td>
+          <td style="padding:6px 4px; text-align:right;">${editable ? `<input class="bc-input" type="number" min="0" id="paid-${m.id}" value="${p.paid||0}" style="width:90px; padding:4px 6px; text-align:right;" />` : formatVND(p.paid||0)}</td>
+          <td style="padding:6px 4px; text-align:right;">${editable ? `<input class="bc-input" type="number" min="0" id="prepaid-${m.id}" value="${p.prepaid||0}" style="width:90px; padding:4px 6px; text-align:right;" />` : formatVND(p.prepaid||0)}</td>
+          <td style="padding:6px 4px; text-align:right; font-weight:500; color:${remaining>0?'#993C1D':'#27500A'};">${formatVND(remaining)}</td>
+        </tr>`);
+        table.appendChild(tr);
+      });
+      wrap.appendChild(tbl);
+      if (canManage()) {
+        const saveBtn = el(`<button class="bc-btn small" id="pay-save" style="margin-bottom:1rem;">Lưu số tiền đã nộp</button>`);
+        wrap.appendChild(saveBtn);
+        setTimeout(() => {
+          saveBtn.onclick = async () => {
+            const entries = {};
+            rowsMembers.forEach(m => {
+              const paidEl = document.getElementById(`paid-${m.id}`);
+              const prepaidEl = document.getElementById(`prepaid-${m.id}`);
+              if (paidEl) entries[m.id] = { paid: parseFloat(paidEl.value)||0, prepaid: parseFloat(prepaidEl.value)||0 };
+            });
+            await mutatePayments(latest => {
+              const updated = Object.assign({}, latest);
+              Object.keys(entries).forEach(mid => {
+                updated[mid] = Object.assign({}, updated[mid] || {});
+                updated[mid][month] = entries[mid];
+              });
+              return updated;
+            });
+            render();
+          };
+        }, 0);
+      }
+    }
+
+    // --- Donate ---
+    wrap.appendChild(el(`<h3 style="font-size:15px; color:#1B4332; margin:1.25rem 0 8px;">Donate công khai · ${monthLabel(month)}</h3>`));
+    const monthDonations = (state.donations||[]).filter(d => d.month === month);
+    if (canManage()) {
+      const donateForm = el(`<div class="bc-card">
+        <div style="display:flex; gap:8px; flex-wrap:wrap;">
+          <select class="bc-select" id="don-member" style="flex:2; min-width:140px;">
+            <option value="">Chọn thành viên donate...</option>
+            ${state.members.map(m => `<option value="${m.id}">${escapeHtml(m.name)}</option>`).join('')}
+          </select>
+          <input class="bc-input" type="number" min="0" id="don-amount" placeholder="Số tiền donate" style="flex:1; min-width:110px;" />
+          <input class="bc-input" type="date" id="don-date" value="${today}" style="flex:1; min-width:130px;" />
+          <input class="bc-input" id="don-note" placeholder="Ghi chú (tuỳ chọn)" style="flex:2; min-width:130px;" />
+          <button class="bc-btn" id="don-add">Thêm</button>
+        </div>
+      </div>`);
+      wrap.appendChild(donateForm);
+      setTimeout(() => {
+        document.getElementById('don-add').onclick = async () => {
+          const mid = document.getElementById('don-member').value;
+          const amount = parseFloat(document.getElementById('don-amount').value) || 0;
+          const date = document.getElementById('don-date').value || today;
+          const note = document.getElementById('don-note').value.trim();
+          if (!mid || !amount) return;
+          const mem = state.members.find(x => x.id === mid);
+          await mutateDonations(latest => latest.concat([{ id: uid(), memberId: mid, memberName: mem ? mem.name : '?', amount, date, note, month }]));
+          render();
+        };
+      }, 0);
+    }
+    if (monthDonations.length === 0) {
+      wrap.appendChild(el(`<div style="font-size:13px; color:#8a877d; margin-bottom:1rem;">Chưa có ai donate tháng này.</div>`));
+    } else {
+      const donList = el(`<div class="bc-card" style="margin-bottom:1rem;"></div>`);
+      monthDonations.forEach(d => {
+        const row = el(`<div style="display:flex; justify-content:space-between; align-items:center; padding:5px 0; border-top:1px solid #F1EFE8; font-size:13px;">
+          <span>🎁 <strong>${escapeHtml(d.memberName)}</strong>${d.note ? ' · ' + escapeHtml(d.note) : ''} <span style="color:#8a877d;">(${d.date||''})</span></span>
+          <span style="display:flex; align-items:center; gap:8px;">
+            <strong style="color:#27500A;">+${formatVND(d.amount)}</strong>
+            ${canDelete() ? `<button class="bc-btn danger small" data-did="${d.id}">Xoá</button>` : ''}
+          </span>
+        </div>`);
+        if (canDelete()) row.querySelector('button').onclick = async () => {
+          await mutateDonations(latest => latest.filter(x => x.id !== d.id));
+          render();
+        };
+        donList.appendChild(row);
+      });
+      wrap.appendChild(donList);
+    }
+
+    // --- Quỹ nhóm ---
+    wrap.appendChild(el(`<h3 style="font-size:15px; color:#1B4332; margin:1.25rem 0 8px;">Quỹ nhóm · ${monthLabel(month)}</h3>`));
+    const f = state.fund[month] || { opening: 0, expenses: [] };
+    const closing = fundClosing(month);
+    if (canManage()) {
+      const openingCard = el(`<div class="bc-card" style="display:flex; align-items:center; gap:8px; flex-wrap:wrap;">
+        <span style="font-size:13px; color:#6b7a73;">Tồn đầu tháng:</span>
+        <input class="bc-input" type="number" id="fund-opening" value="${f.opening||0}" style="width:140px; padding:5px 8px;" />
+        <button class="bc-btn outline small" id="fund-carry">Lấy tồn cuối tháng trước</button>
+        <button class="bc-btn small" id="fund-opening-save">Lưu</button>
+      </div>`);
+      wrap.appendChild(openingCard);
+      const expForm = el(`<div class="bc-card">
+        <h4 style="font-size:14px; margin-bottom:8px; color:#1B4332;">Thêm khoản chi</h4>
+        <div style="display:flex; gap:8px; flex-wrap:wrap;">
+          <select class="bc-select" id="exp-cat" style="flex:1; min-width:120px;">
+            <option>Tiền sân</option><option>Tiền nước</option><option>Tiền cầu</option><option>Liên hoan</option><option>Khác</option>
+          </select>
+          <input class="bc-input" id="exp-label" placeholder="Ghi chú" style="flex:2; min-width:140px;" />
+          <input class="bc-input" type="number" min="0" id="exp-amount" placeholder="Số tiền" style="flex:1; min-width:100px;" />
+          <input class="bc-input" type="date" id="exp-date" value="${today}" style="flex:1; min-width:130px;" />
+          <button class="bc-btn" id="exp-add">Thêm</button>
+        </div>
+      </div>`);
+      wrap.appendChild(expForm);
+      setTimeout(() => {
+        document.getElementById('fund-carry').onclick = () => {
+          document.getElementById('fund-opening').value = Math.round(fundClosing(prevMonthKey(month)).closing);
+        };
+        document.getElementById('fund-opening-save').onclick = async () => {
+          const val = parseFloat(document.getElementById('fund-opening').value) || 0;
+          await mutateFund(latest => {
+            const updated = Object.assign({}, latest);
+            updated[month] = Object.assign({}, updated[month] || { expenses: [] }, { opening: val });
+            return updated;
+          });
+          render();
+        };
+        document.getElementById('exp-add').onclick = async () => {
+          const category = document.getElementById('exp-cat').value;
+          const label = document.getElementById('exp-label').value.trim();
+          const amount = parseFloat(document.getElementById('exp-amount').value) || 0;
+          const date = document.getElementById('exp-date').value || today;
+          if (!amount) return;
+          await mutateFund(latest => {
+            const updated = Object.assign({}, latest);
+            const cur = updated[month] || { opening: 0, expenses: [] };
+            updated[month] = Object.assign({}, cur, { expenses: (cur.expenses||[]).concat([{ id: uid(), category, label, amount, date }]) });
+            return updated;
+          });
+          render();
+        };
+      }, 0);
+    }
+
+    // --- Sổ thu/chi ---
+    const ledgerEntries = [];
+    state.members.forEach(m => {
+      const p = (state.payments[m.id] || {})[month] || {};
+      if (p.paid) ledgerEntries.push({ date: month+'-01', type: 'income', label: 'Thu tiền nộp: ' + m.name, amount: p.paid });
+      if (p.prepaid) ledgerEntries.push({ date: month+'-01', type: 'income', label: 'Nộp trước: ' + m.name, amount: p.prepaid });
+    });
+    monthDonations.forEach(d => ledgerEntries.push({ date: d.date||month+'-01', type: 'income', label: 'Donate: ' + d.memberName + (d.note?' ('+d.note+')':''), amount: d.amount }));
+    (f.expenses||[]).forEach(e => ledgerEntries.push({ date: e.date||month+'-01', type: 'expense', label: e.category + (e.label?' · '+e.label:''), amount: e.amount }));
+    ledgerEntries.sort((a,b) => a.date.localeCompare(b.date));
+
+    if (ledgerEntries.length) {
+      const ledger = el(`<div class="bc-card"><div style="font-size:13px; font-weight:500; color:#1B4332; margin-bottom:6px;">Sổ thu/chi tháng ${monthLabel(month)}</div></div>`);
+      const ltbl = el(`<table style="width:100%; font-size:13px; border-collapse:collapse;"><tr style="color:#8a877d; font-size:12px;"><th style="padding:4px; text-align:left;">Ngày</th><th style="padding:4px; text-align:left;">Nội dung</th><th style="padding:4px; text-align:right;">Số tiền</th></tr></table>`);
+      ledgerEntries.forEach(e => {
+        const inc = e.type === 'income';
+        ltbl.appendChild(el(`<tr style="border-top:1px solid #F1EFE8;">
+          <td style="padding:5px 4px; color:#8a877d; white-space:nowrap;">${e.date}</td>
+          <td style="padding:5px 4px;">${escapeHtml(e.label)}</td>
+          <td style="padding:5px 4px; text-align:right; font-weight:500; color:${inc?'#222':'#993C1D'};">${inc?'+':'-'}${formatVND(e.amount)}</td>
+        </tr>`));
+      });
+      ledger.appendChild(ltbl);
+      wrap.appendChild(ledger);
+    }
+
+    if ((f.expenses||[]).length) {
+      const expList = el(`<div class="bc-card"><div style="font-size:13px; font-weight:500; color:#1B4332; margin-bottom:6px;">Khoản chi trong tháng</div></div>`);
+      (f.expenses||[]).forEach(e => {
+        const row = el(`<div style="display:flex; justify-content:space-between; align-items:center; padding:4px 0; border-top:1px solid #F1EFE8; font-size:13px;">
+          <span>${e.date?`<span style="color:#8a877d;">${e.date} · </span>`:''}${escapeHtml(e.category)}${e.label?' · '+escapeHtml(e.label):''}</span>
+          <span style="display:flex; align-items:center; gap:8px;">
+            <strong style="color:#993C1D;">-${formatVND(e.amount)}</strong>
+            ${canDelete()?`<button class="bc-btn danger small" data-id="${e.id}">Xoá</button>`:''}
+          </span>
+        </div>`);
+        if (canDelete()) row.querySelector('button').onclick = async () => {
+          await mutateFund(latest => {
+            const updated = Object.assign({}, latest);
+            const cur = updated[month] || { opening: 0, expenses: [] };
+            updated[month] = Object.assign({}, cur, { expenses: (cur.expenses||[]).filter(x => x.id !== e.id) });
+            return updated;
+          });
+          render();
+        };
+        expList.appendChild(row);
+      });
+      wrap.appendChild(expList);
+    }
+
+    wrap.appendChild(el(`<div class="bc-card" style="background:#F4F1EA; font-size:13px;">
+      <div style="display:flex; gap:16px; flex-wrap:wrap; align-items:baseline;">
+        <span style="color:#6b7a73;">Tồn đầu: <strong style="color:#1B4332;">${formatVND(closing.opening)}</strong></span>
+        <span style="color:#6b7a73;">Thu nộp: <strong style="color:#222;">+${formatVND(closing.incomePaid)}</strong></span>
+        <span style="color:#6b7a73;">Nộp trước: <strong style="color:#222;">+${formatVND(closing.incomePrepaid)}</strong></span>
+        <span style="color:#6b7a73;">Donate: <strong style="color:#222;">+${formatVND(closing.incomeDonate)}</strong></span>
+        <span style="color:#6b7a73;">Chi: <strong style="color:#993C1D;">-${formatVND(closing.expenseTotal)}</strong></span>
+        <span style="color:#6b7a73; font-size:14px;">Tồn cuối: <strong style="color:#1B4332; font-size:15px;">${formatVND(closing.closing)}</strong></span>
+      </div>
+    </div>`));
+
+    const diffOk = Math.abs(closing.diff) < 1;
+    wrap.appendChild(el(`<div class="bc-card" style="background:${diffOk?'#EAF3DE':'#FAECE7'}; font-size:13px; color:${diffOk?'#27500A':'#993C1D'};">
+      <div style="font-weight:500; margin-bottom:6px;">📊 Đối chiếu chi phí buổi tập vs quỹ · ${monthLabel(month)}</div>
+      <div style="display:flex; gap:16px; flex-wrap:wrap; margin-bottom:4px;">
+        <span>Chi phí ghi trong quỹ: <strong>-${formatVND(closing.expenseTotal)}</strong></span>
+        <span>Chi phí tính từ buổi tập: <strong>-${formatVND(closing.sessionsCostTotal)}</strong></span>
+        <span>Chênh lệch: <strong>${closing.diff>=0?'+':''}${formatVND(closing.diff)}</strong></span>
+      </div>
+      <div>${diffOk ? '✅ Khớp — chi phí quỹ đúng với tổng buổi tập.' : '⚠️ Lệch ' + formatVND(Math.abs(closing.diff)) + ' — kiểm tra lại khoản chi trong quỹ và chi phí từng buổi tập. Lệch do liên hoan/mua đồ riêng là bình thường.'}</div>
+    </div>`));
+
+    setTimeout(() => {
+      document.getElementById('fund-month').onchange = (e) => { state.viewMonth = e.target.value || monthKey(); render(); };
+    }, 0);
+    return wrap;
+  }
+
+  // ---------- DUYỆT THÀNH VIÊN ----------
+  function renderApprove(){
+    const wrap = el(`<div></div>`);
+    if (!canManage()) {
+      wrap.appendChild(el(`<div class="bc-empty">Chức năng này chỉ dành cho Admin và R1.</div>`));
+      return wrap;
+    }
+    const pending = state.members.filter(m => m.status === 'pending');
+    wrap.appendChild(el(`<h3 style="font-size:15px; color:#1B4332; margin-bottom:12px;">Phê duyệt thành viên mới</h3>`));
+    if (pending.length === 0) {
+      wrap.appendChild(el(`<div class="bc-card" style="text-align:center; padding:2rem; color:#8a877d;">
+        <div style="font-size:2rem; margin-bottom:8px;">✅</div>
+        <div style="font-size:14px;">Không có thành viên nào đang chờ duyệt.</div>
+      </div>`));
+      return wrap;
+    }
+    wrap.appendChild(el(`<div style="font-size:13px; color:#6b7a73; margin-bottom:12px;">Có <strong style="color:#993C1D;">${pending.length}</strong> thành viên đang chờ phê duyệt. Xem xét thông tin và chọn Chấp nhận hoặc Từ chối.</div>`));
+    pending.forEach(m => {
+      const card = el(`<div class="bc-card" style="border-left:3px solid #FAEEDA;">
+        <div style="display:flex; align-items:flex-start; gap:12px; flex-wrap:wrap;">
+          <div style="flex:1; min-width:200px;">
+            <div style="font-weight:500; font-size:15px;">${escapeHtml(m.name)}</div>
+            <div style="font-size:13px; color:#6b7a73; margin-top:2px;">@${escapeHtml(m.username||'')} · ${escapeHtml(m.email)}</div>
+            ${m.phone ? `<div style="font-size:13px; color:#8a877d;">📞 ${escapeHtml(m.phone)}</div>` : ''}
+            <div style="font-size:13px; color:#8a877d; margin-top:4px;">
+              Trình độ: <span class="bc-badge" style="background:#EAF3DE; color:#27500A;">${m.level||'—'}</span>
+            </div>
+          </div>
+          <div style="display:flex; gap:8px; align-items:flex-start; flex-wrap:wrap;">
+            <button class="bc-btn small" id="approve-${m.id}">✓ Chấp nhận</button>
+            <button class="bc-btn danger small" id="reject-${m.id}">✕ Từ chối & Xoá</button>
+          </div>
+        </div>
+      </div>`);
+      card.querySelector(`#approve-${m.id}`).onclick = async () => {
+        await mutateMembers(latest => latest.map(x => x.id === m.id ? Object.assign({}, x, { status: 'active' }) : x));
+        render();
+      };
+      card.querySelector(`#reject-${m.id}`).onclick = async () => {
+        if (!confirm(`Từ chối và xoá tài khoản của ${m.name}?`)) return;
+        await mutateMembers(latest => latest.filter(x => x.id !== m.id));
+        render();
+      };
+      wrap.appendChild(card);
+    });
+    return wrap;
+  }
+
+  // ---------- SESSIONS ----------
+  function renderSessions(){
+    const wrap = el(`<div></div>`);
+
+    if (canManage()) {
+      const settingsCard = el(`<div class="bc-card" style="background:#F4F1EA; display:flex; align-items:center; gap:10px; flex-wrap:wrap;">
+        <span style="font-size:13px; color:#6b7a73;">Thành viên vãng lai trả gấp</span>
+        <input class="bc-input" id="ss-multiplier" type="number" step="0.1" min="1" value="${state.settings.casualMultiplier}" style="width:70px; padding:5px 8px;" />
+        <span style="font-size:13px; color:#6b7a73;">lần so với cố định (áp dụng mọi buổi)</span>
+      </div>`);
+      wrap.appendChild(settingsCard);
+
+      const brandCard = el(`<div class="bc-card">
+        <h3 style="font-size:15px; margin-bottom:10px; color:#1B4332;">Logo &amp; banner màn hình đăng nhập</h3>
+        <div style="display:flex; gap:16px; flex-wrap:wrap; align-items:flex-start;">
+          <div>
+            <div style="font-size:12px; color:#8a877d; margin-bottom:4px;">Logo (ảnh vuông nhỏ)</div>
+            ${state.settings.logoUrl ? `<img src="${state.settings.logoUrl}" style="width:56px; height:56px; object-fit:cover; border-radius:50%; margin-bottom:6px; display:block;" />` : ''}
+            <input type="file" accept="image/*" id="brand-logo-input" style="font-size:12px;" />
+          </div>
+          <div>
+            <div style="font-size:12px; color:#8a877d; margin-bottom:4px;">Banner (ảnh ngang)</div>
+            ${state.settings.bannerUrl ? `<img src="${state.settings.bannerUrl}" style="width:160px; height:50px; object-fit:cover; border-radius:8px; margin-bottom:6px; display:block;" />` : ''}
+            <input type="file" accept="image/*" id="brand-banner-input" style="font-size:12px;" />
+          </div>
+        </div>
+        <div style="font-size:12px; color:#8a877d; margin-top:8px;">Chọn ảnh nhẹ (dưới ~1MB) để tránh lưu trữ quá nặng.</div>
+      </div>`);
+      wrap.appendChild(brandCard);
+
+      setTimeout(() => {
+        const toDataUrl = (file, cb) => { const r = new FileReader(); r.onload = () => cb(r.result); r.readAsDataURL(file); };
+        document.getElementById('brand-logo-input').onchange = (e) => {
+          const f = e.target.files[0]; if (!f) return;
+          toDataUrl(f, (url) => { state.settings.logoUrl = url; saveSettings(); render(); });
+        };
+        document.getElementById('brand-banner-input').onchange = (e) => {
+          const f = e.target.files[0]; if (!f) return;
+          toDataUrl(f, (url) => { state.settings.bannerUrl = url; saveSettings(); render(); });
+        };
+      }, 0);
+
+      const courtOptions = state.courts.length
+        ? state.courts.map(c => `<option value="${c.id}">${escapeHtml(c.name)}</option>`).join('')
+        : `<option value="">(chưa có sân, thêm ở tab Sân cầu)</option>`;
+      const form = el(`<div class="bc-card">
+        <h3 style="font-size:15px; margin-bottom:10px; color:#1B4332;">Tạo buổi đánh mới</h3>
+        <div style="display:flex; gap:8px; flex-wrap:wrap;">
+          <input class="bc-input" type="date" id="ss-date" style="flex:1.2; min-width:140px;" />
+          <input class="bc-input" type="time" id="ss-time" style="flex:1; min-width:100px;" />
+          <span style="align-self:center; color:#8a877d; font-size:13px;">đến</span>
+          <input class="bc-input" type="time" id="ss-time-end" style="flex:1; min-width:100px;" />
+          <select class="bc-select" id="ss-court" style="flex:1.4; min-width:160px;">${courtOptions}</select>
+        </div>
+        <div id="ss-date-preview" style="font-size:12px; color:#8a877d; margin-top:4px;"></div>
+        <div style="display:flex; gap:8px; margin-top:8px;">
+          <input class="bc-input" id="ss-max" type="number" min="2" placeholder="Số người tối đa" style="flex:1;" />
+          <input class="bc-input" id="ss-note" placeholder="Ghi chú (tuỳ chọn)" style="flex:2;" />
+        </div>
+        <button class="bc-btn" id="ss-add" style="margin-top:10px;">Tạo buổi</button>
+      </div>`);
+      wrap.appendChild(form);
+
+      setTimeout(() => {
+        const updatePreview = () => {
+          const d = document.getElementById('ss-date').value;
+          const prev = document.getElementById('ss-date-preview');
+          prev.textContent = d ? weekdayLabel(d) + ', ngày ' + formatDate(d) : '';
+        };
+        document.getElementById('ss-date').oninput = updatePreview;
+        updatePreview();
+        document.getElementById('ss-multiplier').onchange = (e) => {
+          const v = parseFloat(e.target.value);
+          state.settings.casualMultiplier = isNaN(v) || v < 1 ? 1 : v;
+          saveSettings(); render();
+        };
+        document.getElementById('ss-add').onclick = () => {
+          const date = document.getElementById('ss-date').value;
+          const time = document.getElementById('ss-time').value;
+          const timeEnd = document.getElementById('ss-time-end').value;
+          if (!date || !time) { alert('Chọn ngày và giờ bắt đầu.'); return; }
+          if (timeEnd && timeEnd <= time) { alert('Giờ kết thúc phải sau giờ bắt đầu.'); return; }
+          const courtId = document.getElementById('ss-court').value;
+          const max = parseInt(document.getElementById('ss-max').value, 10) || null;
+          const note = document.getElementById('ss-note').value.trim();
+          state.sessions.push({ id: uid(), date, time, timeEnd, courtId, max, note, votes: {}, costs: { court: 0, water: 0, shuttle: 0, other: 0 }, flatRate: { enabled: false, fixed: 0, casual: 0 } });
+          saveSessions(); render();
+        };
+      }, 0);
+    }
+
+    const nowStamp = (new Date()).toISOString().slice(0,16).replace('T','');
+    let all = state.sessions.slice();
+
+    // --- Thanh lọc ---
+    const searchCard = el(`<div class="bc-card" style="display:flex; gap:8px; flex-wrap:wrap; align-items:center;">
+      <span style="font-size:13px; color:#8a877d; white-space:nowrap;">Lọc buổi:</span>
+      <input class="bc-input" type="month" id="search-month" value="${state.sessionSearchDate}" placeholder="Tháng" style="width:145px; padding:5px 8px;" />
+      <select class="bc-select" id="search-court" style="flex:1; min-width:150px; padding:5px 8px;">
+        <option value="">Tất cả sân</option>
+        ${state.courts.map(c => `<option value="${c.id}" ${state.sessionSearchCourt===c.id?'selected':''}>${escapeHtml(c.name)}</option>`).join('')}
+      </select>
+      <button class="bc-btn small" id="search-btn">🔍 Tìm</button>
+      ${(state.sessionSearchDate || state.sessionSearchCourt) ? `<button class="bc-btn outline small" id="search-clear">✕ Xoá lọc</button>` : ''}
+      <span style="font-size:12px; color:#8a877d; margin-left:auto;">${all.length} buổi tổng cộng</span>
+    </div>`);
+    wrap.appendChild(searchCard);
+    setTimeout(() => {
+      document.getElementById('search-btn').onclick = () => {
+        state.sessionSearchDate = document.getElementById('search-month').value;
+        state.sessionSearchCourt = document.getElementById('search-court').value;
+        state.upcomingPage = 0;
+        render();
+      };
+      // Cho phép nhấn Enter trong ô tháng để tìm luôn
+      document.getElementById('search-month').onkeydown = (e) => { if (e.key === 'Enter') document.getElementById('search-btn').click(); };
+      const clearBtn = document.getElementById('search-clear');
+      if (clearBtn) clearBtn.onclick = () => { state.sessionSearchDate = ''; state.sessionSearchCourt = ''; state.upcomingPage = 0; render(); };
+    }, 0);
+
+    if (state.sessionSearchDate) all = all.filter(s => s.date && s.date.slice(0,7) === state.sessionSearchDate);
+    if (state.sessionSearchCourt) all = all.filter(s => s.courtId === state.sessionSearchCourt);
+    const isFiltering = !!(state.sessionSearchDate || state.sessionSearchCourt);
+
+    const upcoming = all.filter(s => (s.date + (s.time||'00:00')) >= nowStamp).sort((a,b) => (a.date+a.time).localeCompare(b.date+b.time));
+    const past = all.filter(s => (s.date + (s.time||'00:00')) < nowStamp).sort((a,b) => (b.date+b.time).localeCompare(a.date+a.time));
+
+    const SPAGE = 4; // buổi sắp tới mỗi trang
+
+    if (all.length === 0) {
+      wrap.appendChild(el(`<div class="bc-empty">${isFiltering ? 'Không tìm thấy buổi đánh phù hợp.' : 'Chưa có buổi đánh nào.' + (canManage() ? ' Tạo buổi đầu tiên ở trên.' : ' Hãy đợi Admin/R1 tạo buổi.')}</div>`));
+    } else {
+      // --- UPCOMING: phân trang ---
+      if (upcoming.length === 0 && !isFiltering) {
+        wrap.appendChild(el(`<div class="bc-empty">Không có buổi sắp tới. Các buổi cũ bên dưới.</div>`));
+      } else if (upcoming.length > 0) {
+        const uPage = state.upcomingPage || 0;
+        const uTotal = Math.ceil(upcoming.length / SPAGE);
+        const uSlice = upcoming.slice(uPage * SPAGE, (uPage + 1) * SPAGE);
+        if (upcoming.length > SPAGE) {
+          wrap.appendChild(el(`<div style="display:flex; align-items:center; justify-content:space-between; margin-bottom:4px;">
+            <span style="font-size:13px; font-weight:500; color:#1B4332;">Buổi sắp tới (${upcoming.length})</span>
+            <div style="display:flex; gap:6px; align-items:center; font-size:13px; color:#6b7a73;">
+              ${uPage > 0 ? `<button class="bc-btn outline small" id="up-prev">◀</button>` : '<span></span>'}
+              <span>Trang ${uPage+1}/${uTotal}</span>
+              ${uPage < uTotal-1 ? `<button class="bc-btn outline small" id="up-next">▶</button>` : '<span></span>'}
+            </div>
+          </div>`));
+          setTimeout(() => {
+            const prev = document.getElementById('up-prev');
+            const next = document.getElementById('up-next');
+            if (prev) prev.onclick = () => { state.upcomingPage = uPage - 1; render(); };
+            if (next) next.onclick = () => { state.upcomingPage = uPage + 1; render(); };
+          }, 0);
+        }
+        uSlice.forEach(s => wrap.appendChild(renderSessionCard(s)));
+      }
+
+      // --- PAST: thu gọn mặc định, bấm để mở ---
+      if (past.length > 0) {
+        const pastExpanded = state.pastExpanded || isFiltering;
+        const pastVisible = pastExpanded ? past : past.slice(0, 2);
+        const header = el(`<div style="display:flex; align-items:center; justify-content:space-between; margin:1rem 0 0.5rem; cursor:pointer;" id="past-header">
+          <span style="font-size:13px; font-weight:500; color:#8a877d;">Buổi đã qua (${past.length})</span>
+          ${!isFiltering ? `<button class="bc-btn outline small">${pastExpanded ? '▲ Thu gọn' : '▼ Xem tất cả'}</button>` : ''}
+        </div>`);
+        wrap.appendChild(header);
+        pastVisible.forEach(s => wrap.appendChild(renderSessionCard(s)));
+        if (!isFiltering && !pastExpanded && past.length > 2) {
+          wrap.appendChild(el(`<div style="font-size:13px; color:#8a877d; text-align:center; margin-top:4px;">... và ${past.length - 2} buổi cũ hơn</div>`));
+        }
+        setTimeout(() => {
+          const ph = document.getElementById('past-header');
+          if (ph) ph.onclick = () => { state.pastExpanded = !state.pastExpanded; state.pastPage = 0; render(); };
+        }, 0);
+      }
+    }
+    return wrap;
+  }
+
+  function renderSessionCard(s){
+    const court = state.courts.find(c => c.id === s.courtId);
+    const yes = Object.entries(s.votes).filter(([,v]) => v === 'yes').map(([name]) => name);
+    const no = Object.entries(s.votes).filter(([,v]) => v === 'no').map(([name]) => name);
+    const full = s.max && yes.length >= s.max;
+    s.costs = s.costs || { court: 0, water: 0, shuttle: 0, other: 0 };
+    const shares = computeShares(s);
+
+    const card = el(`<div class="bc-card">
+      <div style="display:flex; justify-content:space-between; align-items:flex-start;">
+        <div>
+          <div style="font-weight:500; font-size:15px; color:#1B4332;">${weekdayLabel(s.date)}, ngày ${formatDate(s.date)} · ${formatTimeRange(s.time, s.timeEnd)}</div>
+          <div style="font-size:13px; color:#6b7a73; margin-top:2px;">${court ? escapeHtml(court.name) : 'Chưa chọn sân'}${court && court.address ? ' · ' + escapeHtml(court.address) : ''}${court && court.mapLink ? ` · <a href="${escapeHtml(court.mapLink)}" target="_blank" style="color:#0C447C;">📍 Google Maps</a>` : ''}</div>
+          ${s.note ? `<div style="font-size:13px; color:#8a877d; margin-top:2px;">${escapeHtml(s.note)}</div>` : ''}
+        </div>
+        <div style="display:flex; gap:6px; align-items:center;">
+          ${canManage() ? `<button class="bc-btn ${s.locked?'danger':'outline'} small" id="lock-${s.id}">${s.locked ? 'Mở chốt' : 'Chốt buổi'}</button>` : ''}
+          ${canDelete() ? `<button class="bc-btn danger small" id="del-${s.id}">Xoá</button>` : ''}
+        </div>
+      </div>
+      <div style="display:flex; gap:14px; margin-top:10px; font-size:13px; color:#6b7a73; flex-wrap:wrap;">
+        <span><span class="bc-badge" style="background:#EAF3DE; color:#27500A;">${yes.length}${s.max ? '/'+s.max : ''} tham gia</span></span>
+        <span><span class="bc-badge" style="background:#FAECE7; color:#993C1D;">${no.length} vắng</span></span>
+        ${full ? `<span class="bc-badge" style="background:#FAEEDA; color:#854F0B;">Đủ người</span>` : ''}
+        ${s.locked ? `<span class="bc-badge" style="background:#FAEEDA; color:#854F0B;">🔒 Đã chốt</span>` : ''}
+      </div>
+      <div style="margin-top:10px; display:flex; gap:8px;" id="vote-${s.id}"></div>
+      <div style="margin-top:12px; border-top:1px dashed #E3E0D6; padding-top:10px;" id="vote-table-${s.id}"></div>
+      <div style="margin-top:12px; border-top:1px dashed #E3E0D6; padding-top:10px;" id="cost-${s.id}"></div>
+    </div>`);
+
+    if (canManage()) {
+      const lockBtn = card.querySelector(`#lock-${s.id}`);
+      lockBtn.onclick = () => { s.locked = !s.locked; saveSessions(); render(); };
+    }
+
+    const voteRow = card.querySelector(`#vote-${s.id}`);
+    const lockedForMe = s.locked && role() === 'r2';
+    if (state.me.status !== 'active') {
+      voteRow.appendChild(el(`<div style="font-size:13px; color:#8a877d;">Tài khoản của bạn đang Ngưng hoạt động, liên hệ Admin để vote lại.</div>`));
+    } else if (lockedForMe) {
+      voteRow.appendChild(el(`<div style="font-size:13px; color:#854F0B;">🔒 Buổi đã được chốt, không thể thay đổi vote. Liên hệ Admin/R1 nếu cần sửa.</div>`));
+    } else {
+      const myVote = s.votes[state.me.name];
+      const yesBtn = el(`<button class="bc-btn small ${myVote==='yes'?'':'outline'}">Tham gia</button>`);
+      const noBtn = el(`<button class="bc-btn small ${myVote==='no'?'':'outline'}">Không tham gia</button>`);
+      yesBtn.onclick = () => { s.votes[state.me.name] = 'yes'; saveSessions(); render(); };
+      noBtn.onclick = () => { s.votes[state.me.name] = 'no'; saveSessions(); render(); };
+      voteRow.appendChild(yesBtn); voteRow.appendChild(noBtn);
+    }
+
+    const voteTable = card.querySelector(`#vote-table-${s.id}`);
+    voteTable.appendChild(el(`<div style="font-size:13px; font-weight:500; color:#1B4332; margin-bottom:6px;">Bảng vote</div>`));
+    if (state.members.length === 0) {
+      voteTable.appendChild(el(`<div style="font-size:13px; color:#8a877d;">Chưa có thành viên nào.</div>`));
+    } else {
+      const mKey = sessionMonthKey(s);
+      s.passes = s.passes || {};
+      const passes = s.passes;
+      const casualAttendees = state.members.filter(x => s.votes[x.name] === 'yes' && memberType(x.name, mKey) !== 'fixed');
+      const lockedForOthers = s.locked && role() === 'r2';
+
+      const tbl = el(`<table style="width:100%; font-size:13px; border-collapse:collapse;"></table>`);
+      let hiddenCount = 0;
+      state.members.forEach(m => {
+        const v = s.votes[m.name];
+        const t = memberType(m.name, mKey);
+        const hasPassed = t === 'fixed' && passes[m.id];
+        const notVoted = !v;
+
+        // Khi buổi đã chốt: ẩn thành viên chưa vote
+        if (s.locked && notVoted && !hasPassed) { hiddenCount++; return; }
+
+        const statusBadge = hasPassed
+          ? `<span class="bc-badge" style="background:#FAEEDA; color:#854F0B;">Đã pass (tính vắng)</span>`
+          : v === 'yes'
+          ? `<span class="bc-badge" style="background:#EAF3DE; color:#27500A;">Tham gia</span>`
+          : v === 'no'
+            ? `<span class="bc-badge" style="background:#FAECE7; color:#993C1D;">Vắng</span>`
+            : `<span class="bc-badge" style="background:#F1EFE8; color:#888780;">Chưa vote</span>`;
+
+        let passCell = '';
+        if (t === 'fixed') {
+          const isSelfRow = state.me && state.me.id === m.id;
+          const editable = canManage() || (isSelfRow && !lockedForOthers);
+          if (editable) {
+            passCell = `<select class="bc-select" id="pass-${s.id}-${m.id}" style="width:150px; padding:4px 6px; font-size:12px;">
+              <option value="">Không pass</option>
+              ${casualAttendees.map(c => `<option value="${c.id}" ${passes[m.id]===c.id?'selected':''}>Pass cho ${escapeHtml(c.name)}</option>`).join('')}
+            </select>`;
+          } else if (passes[m.id]) {
+            const target = state.members.find(x => x.id === passes[m.id]);
+            passCell = target ? `<span style="font-size:12px; color:#8a877d;">Đã pass cho ${escapeHtml(target.name)}</span>` : '';
+          }
+        } else {
+          const fromId = Object.keys(passes).find(fid => passes[fid] === m.id);
+          if (fromId) {
+            const fromMember = state.members.find(x => x.id === fromId);
+            passCell = `<span class="bc-badge" style="background:#E6F1FB; color:#0C447C;">Nhận pass từ ${fromMember ? escapeHtml(fromMember.name) : '?'}</span>`;
+          }
+        }
+
+        tbl.appendChild(el(`<tr style="border-top:1px solid #F1EFE8;">
+          <td style="padding:5px 4px; width:30px;">${avatarHtml(m, 26)}</td>
+          <td style="padding:5px 4px;">${escapeHtml(m.name)}</td>
+          <td style="padding:5px 4px; color:#8a877d;">${t === 'fixed' ? 'Cố định' : 'Vãng lai'}</td>
+          <td style="padding:5px 4px;">${passCell}</td>
+          <td style="padding:5px 4px; text-align:right;">${statusBadge}</td>
+        </tr>`));
+      });
+      voteTable.appendChild(tbl);
+      if (s.locked && hiddenCount > 0) {
+        voteTable.appendChild(el(`<div style="font-size:12px; color:#8a877d; margin-top:6px; font-style:italic;">🔒 Đã ẩn ${hiddenCount} thành viên chưa vote (buổi đã chốt). Mở chốt để hiển thị lại.</div>`));
+      }
+
+      setTimeout(() => {
+        state.members.forEach(m => {
+          const sel = document.getElementById(`pass-${s.id}-${m.id}`);
+          if (sel) sel.onchange = (e) => {
+            const val = e.target.value;
+            s.passes = s.passes || {};
+            if (val) s.passes[m.id] = val; else delete s.passes[m.id];
+            saveSessions(); render();
+          };
+        });
+      }, 0);
+    }
+
+    const costBox = card.querySelector(`#cost-${s.id}`);
+    s.costs = s.costs || { court: 0, water: 0, shuttle: 0, other: 0 };
+    s.flatRate = s.flatRate || { enabled: false, fixed: 0, casual: 0 };
+    s.penalties = s.penalties || {};
+
+    // --- Tiêu đề + nút chuyển chế độ (R1/Admin) ---
+    const costModeBar = el(`<div style="display:flex; align-items:center; justify-content:space-between; flex-wrap:wrap; gap:8px; margin-bottom:8px;">
+      <span style="font-size:13px; font-weight:500; color:#1B4332;">Chi phí buổi này</span>
+      ${canManage() ? `<div style="display:flex; gap:6px;">
+        <button class="bc-btn ${!s.flatRate.enabled?'':'outline'} small" id="mode-split-${s.id}">Chia chi phí</button>
+        <button class="bc-btn ${s.flatRate.enabled?'':'outline'} small" id="mode-flat-${s.id}">Áp mức cố định</button>
+      </div>` : `<span class="bc-badge" style="background:#E6F1FB; color:#0C447C;">${s.flatRate.enabled ? 'Áp mức cố định' : 'Chia chi phí'}</span>`}
+    </div>`);
+    costBox.appendChild(costModeBar);
+
+    if (canManage()) setTimeout(() => {
+      const btnSplit = document.getElementById(`mode-split-${s.id}`);
+      const btnFlat = document.getElementById(`mode-flat-${s.id}`);
+      if (btnSplit) btnSplit.onclick = () => { s.flatRate.enabled = false; saveSessions(); render(); };
+      if (btnFlat) btnFlat.onclick = () => { s.flatRate.enabled = true; saveSessions(); render(); };
+    }, 0);
+
+    if (canManage()) {
+      if (s.flatRate.enabled) {
+        // --- Form áp mức cố định ---
+        const flatForm = el(`<div style="display:flex; gap:8px; flex-wrap:wrap; align-items:flex-end; margin-bottom:10px; padding:10px; background:#F4F1EA; border-radius:8px;">
+          <div><label style="font-size:12px; color:#8a877d; display:block; margin-bottom:4px;">Mức phí · Thành viên cố định</label>
+            <input class="bc-input" type="number" min="0" id="flat-fixed-${s.id}" value="${s.flatRate.fixed||0}" style="width:130px;" /></div>
+          <div><label style="font-size:12px; color:#8a877d; display:block; margin-bottom:4px;">Mức phí · Thành viên vãng lai</label>
+            <input class="bc-input" type="number" min="0" id="flat-casual-${s.id}" value="${s.flatRate.casual||0}" style="width:130px;" /></div>
+          <button class="bc-btn small" id="flat-save-${s.id}" style="align-self:flex-end;">Lưu mức phí</button>
+        </div>`);
+        costBox.appendChild(flatForm);
+        setTimeout(() => {
+          document.getElementById(`flat-save-${s.id}`).onclick = () => {
+            s.flatRate.fixed = parseFloat(document.getElementById(`flat-fixed-${s.id}`).value) || 0;
+            s.flatRate.casual = parseFloat(document.getElementById(`flat-casual-${s.id}`).value) || 0;
+            saveSessions(); render();
+          };
+        }, 0);
+      } else {
+        // --- Form chia chi phí ---
+        const costForm = el(`<div style="display:grid; grid-template-columns: repeat(auto-fit, minmax(120px,1fr)); gap:8px; margin-bottom:8px;">
+          <div><label style="font-size:12px; color:#8a877d;">Tiền sân</label><input class="bc-input" type="number" min="0" id="cost-court-${s.id}" value="${s.costs.court}" /></div>
+          <div><label style="font-size:12px; color:#8a877d;">Tiền nước</label><input class="bc-input" type="number" min="0" id="cost-water-${s.id}" value="${s.costs.water}" /></div>
+          <div><label style="font-size:12px; color:#8a877d;">Tiền cầu</label><input class="bc-input" type="number" min="0" id="cost-shuttle-${s.id}" value="${s.costs.shuttle}" /></div>
+          <div><label style="font-size:12px; color:#8a877d;">Phát sinh khác</label><input class="bc-input" type="number" min="0" id="cost-other-${s.id}" value="${s.costs.other}" /></div>
+        </div>`);
+        costBox.appendChild(costForm);
+        costBox.appendChild(el(`<button class="bc-btn outline small" id="cost-save-${s.id}" style="margin-bottom:10px;">Lưu chi phí</button>`));
+        setTimeout(() => {
+          document.getElementById(`cost-save-${s.id}`).onclick = () => {
+            s.costs = {
+              court: parseFloat(document.getElementById(`cost-court-${s.id}`).value) || 0,
+              water: parseFloat(document.getElementById(`cost-water-${s.id}`).value) || 0,
+              shuttle: parseFloat(document.getElementById(`cost-shuttle-${s.id}`).value) || 0,
+              other: parseFloat(document.getElementById(`cost-other-${s.id}`).value) || 0
+            };
+            saveSessions(); render();
+          };
+        }, 0);
+      }
+
+      // --- Phạt đi trễ (chung cho cả 2 chế độ) ---
+      const penaltySection = el(`<div style="margin-top:6px; border-top:1px dashed #E3E0D6; padding-top:8px;">
+        <div style="font-size:13px; font-weight:500; color:#854F0B; margin-bottom:6px;">Phạt đi trễ</div>
+        <div style="display:flex; gap:6px; flex-wrap:wrap; margin-bottom:6px;">
+          <select class="bc-select" id="pen-member-${s.id}" style="flex:2; min-width:140px;">
+            <option value="">Chọn thành viên...</option>
+            ${state.members.filter(m => s.votes[m.name]==='yes').map(m => `<option value="${m.id}">${escapeHtml(m.name)}</option>`).join('')}
+          </select>
+          <input class="bc-input" type="number" min="0" id="pen-amount-${s.id}" placeholder="Số tiền phạt" style="flex:1; min-width:100px;" />
+          <button class="bc-btn small" id="pen-add-${s.id}">Thêm phạt</button>
+        </div>
+        <div id="pen-list-${s.id}"></div>
+      </div>`);
+      costBox.appendChild(penaltySection);
+      const penList = penaltySection.querySelector(`#pen-list-${s.id}`);
+      Object.entries(s.penalties).forEach(([mid, penAmt]) => {
+        if (!penAmt) return;
+        const mem = state.members.find(x => x.id === mid);
+        if (!mem) return;
+        const row = el(`<div style="display:flex; justify-content:space-between; align-items:center; font-size:13px; border-top:1px solid #F1EFE8; padding:4px 0;">
+          <span style="color:#854F0B;">⚠ ${escapeHtml(mem.name)} đi trễ</span>
+          <span style="display:flex; align-items:center; gap:8px;">
+            <strong style="color:#993C1D;">${formatVND(penAmt)}</strong>
+            <button class="bc-btn danger small" data-penid="${mid}">Xoá</button>
+          </span>
+        </div>`);
+        row.querySelector('button').onclick = () => { delete s.penalties[mid]; saveSessions(); render(); };
+        penList.appendChild(row);
+      });
+      setTimeout(() => {
+        const penAddBtn = document.getElementById(`pen-add-${s.id}`);
+        if (penAddBtn) penAddBtn.onclick = () => {
+          const mid = document.getElementById(`pen-member-${s.id}`).value;
+          const amt = parseFloat(document.getElementById(`pen-amount-${s.id}`).value) || 0;
+          if (!mid || !amt) return;
+          s.penalties[mid] = (s.penalties[mid] || 0) + amt;
+          saveSessions(); render();
+        };
+      }, 0);
+    }
+
+    // --- Tổng phạt ---
+    const penaltyMap = {};
+    Object.entries(s.penalties||{}).forEach(([mid, amt]) => { penaltyMap[mid] = amt || 0; });
+
+    // --- Bảng chi tiết chi phí (chung cho cả 2 chế độ) ---
+    const hasData = shares.mode === 'flat' ? (shares.fixedShare > 0 || shares.casualShare > 0) : shares.total > 0;
+    if (hasData || shares.fixedNames.length || shares.casualNames.length) {
+      if (shares.mode === 'flat') {
+        costBox.appendChild(el(`<div style="margin-top:10px; font-size:13px; color:#6b7a73;">
+          Mức áp: Cố định <strong style="color:#1B4332;">${formatVND(shares.fixedShare)}</strong>
+          · Vãng lai <strong style="color:#1B4332;">${formatVND(shares.casualShare)}</strong>
+          · Tổng thu: <strong style="color:#1B4332;">${formatVND(shares.total)}</strong>
+        </div>`));
+      } else if (shares.total > 0) {
+        costBox.appendChild(el(`<div style="margin-top:10px; font-size:13px; color:#6b7a73;">
+          Tổng chia: <strong style="color:#1B4332;">${formatVND(shares.total)}</strong>
+          · Cố định: <strong style="color:#1B4332;">${formatVND(shares.fixedShare)}</strong>
+          · Vãng lai (×${shares.multiplier}): <strong style="color:#1B4332;">${formatVND(shares.casualShare)}</strong>
+        </div>`));
+      }
+
+      const allPayers = [
+        ...shares.fixedNames.map(n => ({ name: n, type: 'fixed', base: shares.fixedShare })),
+        ...shares.casualNames.map(n => ({ name: n, type: 'casual', base: shares.casualShare })),
+        ...shares.freeNames.map(n => ({ name: n, type: 'free', base: 0 }))
+      ];
+      if (allPayers.length) {
+        const detail = el(`<table style="width:100%; font-size:13px; border-collapse:collapse; margin-top:8px;"></table>`);
+        detail.appendChild(el(`<tr style="color:#8a877d; font-size:12px;">
+          <th style="padding:4px; text-align:left;">Thành viên</th>
+          <th style="padding:4px; text-align:left;">Loại</th>
+          <th style="padding:4px; text-align:right;">Chi phí</th>
+          <th style="padding:4px; text-align:right;">Phạt trễ</th>
+          <th style="padding:4px; text-align:right;">Tổng phải trả</th>
+        </tr>`));
+        allPayers.forEach(p => {
+          const mem = state.members.find(x => x.name === p.name);
+          const pen = mem ? (penaltyMap[mem.id] || 0) : 0;
+          const typeLabel = p.type === 'fixed' ? 'Cố định' : p.type === 'free' ? '<span style="color:#27500A">Miễn phí (nhận pass)</span>' : 'Vãng lai';
+          detail.appendChild(el(`<tr style="border-top:1px solid #F1EFE8;">
+            <td style="padding:5px 4px;">${escapeHtml(p.name)}</td>
+            <td style="padding:5px 4px; color:#8a877d;">${typeLabel}</td>
+            <td style="padding:5px 4px; text-align:right;">${formatVND(p.base)}</td>
+            <td style="padding:5px 4px; text-align:right; color:#854F0B;">${pen ? formatVND(pen) : '—'}</td>
+            <td style="padding:5px 4px; text-align:right; font-weight:600; color:#1B4332;">${formatVND(p.base + pen)}</td>
+          </tr>`));
+        });
+        costBox.appendChild(detail);
+      }
+    } else if (canManage()) {
+      const hint = s.flatRate.enabled
+        ? `<div style="font-size:13px; color:#8a877d; margin-top:8px;">Nhập mức phí cố định và vãng lai rồi lưu để xem bảng chi tiết.</div>`
+        : `<div style="font-size:13px; color:#8a877d; margin-top:8px;">Nhập chi phí và lưu để tính tiền chia cho từng người đã tham gia.</div>`;
+      costBox.appendChild(el(hint));
+    }
+
+    if (canDelete()) {
+      const delBtn = card.querySelector(`#del-${s.id}`);
+      if (delBtn) delBtn.onclick = () => {
+        if (!confirm('Xoá buổi đánh này?')) return;
+        state.sessions = state.sessions.filter(x => x.id !== s.id);
+        saveSessions(); render();
+      };
+    }
+
+    return card;
+  }
+
+  // ---------- LÀM MỚI DỮ LIỆU ----------
+  let refreshing = false;
+  let pendingRefreshTimer = null;
+
+  async function refreshAll(){
+    if (!state.me || refreshing) return;
+    const ae = document.activeElement;
+    if (ae && /INPUT|TEXTAREA|SELECT/.test(ae.tagName)) {
+      // Đang nhập — hủy timer cũ rồi đặt delay 5 giây sau khi blur
+      clearTimeout(pendingRefreshTimer);
+      const deferRefresh = () => { clearTimeout(pendingRefreshTimer); pendingRefreshTimer = setTimeout(refreshAll, 5000); };
+      ae.removeEventListener('blur', deferRefresh);
+      ae.addEventListener('blur', deferRefresh, { once: true });
+      return;
+    }
+    refreshing = true;
+    try {
+      const [members, courts, sessions, settingsRaw, payments, fund, donations] = await Promise.all([
+        loadKey('bc_members', state.members),
+        loadKey('bc_courts', state.courts),
+        loadKey('bc_sessions', state.sessions),
+        loadKey('bc_settings', {}),
+        loadKey('bc_payments', state.payments),
+        loadKey('bc_fund', state.fund),
+        loadKey('bc_donations', state.donations),
+      ]);
+      state.members = members;
+      state.courts = courts;
+      state.sessions = sessions;
+      state.settings = Object.assign({ casualMultiplier: 1.5, logoUrl: '', bannerUrl: '' }, settingsRaw);
+      state.payments = payments;
+      state.fund = fund;
+      state.donations = donations;
+      resolveMe();
+      render();
+    } catch(e) {
+      console.error('Làm mới thất bại', e);
+    } finally {
+      refreshing = false;
+    }
+  }
+  let autoRefreshTimer = null;
+  function startAutoRefresh(){
+    if (autoRefreshTimer) return;
+    autoRefreshTimer = setInterval(refreshAll, 10000);
+    document.addEventListener('visibilitychange', () => { if (!document.hidden) refreshAll(); });
+    window.addEventListener('focus', () => refreshAll());
+  }
+
+  loadAll().then(() => {
+    document.getElementById('loading').style.display = 'none';
+    document.getElementById('root').style.display = 'block';
+    render();
+    startAutoRefresh();
+  });
+})();
+</script>
