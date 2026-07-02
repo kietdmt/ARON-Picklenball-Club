@@ -30,9 +30,7 @@
 (function(){
   const LEVELS = ["Mới chơi", "Trung bình", "Khá", "Giỏi"];
   const LEVEL_COLOR = { "Mới chơi": ["#EAF3DE","#27500A"], "Trung bình": ["#E6F1FB","#0C447C"], "Khá": ["#FAEEDA","#854F0B"], "Giỏi": ["#FAECE7","#993C1D"] };
-  const PROTECTED_USERNAME = 'kietdmt';
-  function isProtected(m){ return normUsername(m.username||'') === PROTECTED_USERNAME; }
-  function canResetProtected(){ return state.me && (normUsername(state.me.username||'') === PROTECTED_USERNAME || state.me.role === 'admin'); }
+  const MAX_MEMBERS = 50;
   const MONTH_NAMES = ["Th1","Th2","Th3","Th4","Th5","Th6","Th7","Th8","Th9","Th10","Th11","Th12"];
   const ROLE_LABEL = { admin: "Admin", r1: "R1", r2: "R2" };
   const ROLE_COLOR = { admin: ["#FAECE7","#993C1D"], r1: ["#FAEEDA","#854F0B"], r2: ["#F1EFE8","#444441"] };
@@ -44,6 +42,15 @@
   function escapeHtml(s){ return (s||'').replace(/[&<>"']/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c])); }
   function normEmail(e){ return (e||'').trim().toLowerCase(); }
   function normUsername(u){ return (u||'').trim().toLowerCase().replace(/\s+/g,''); }
+  async function hashPassword(password, username) {
+    if (!password) return '';
+    const encoder = new TextEncoder();
+    const salt = normUsername(username);
+    const data = encoder.encode(password + salt + "badminton_secure_salt_9988");
+    const hashBuffer = await crypto.subtle.digest('SHA-256', data);
+    const hashArray = Array.from(new Uint8Array(hashBuffer));
+    return hashArray.map(b => b.toString(16).padStart(2, '0')).join('');
+  }
   function el(html){ const t = document.createElement('template'); t.innerHTML = html.trim(); return t.content.firstChild; }
   function formatVND(n, signed){
     n = Math.round(n || 0);
@@ -63,8 +70,7 @@
     authMode: 'login', authError: '', remember: false,
     sessionSearchDate: '', sessionSearchCourt: '', pastVisibleCount: 3,
     memberSearch: '', memberVisibleCount: 15,
-    saveError: null, rememberData: null,
-    upcomingPage: 0, pastExpanded: false, pastPage: 0
+    lastUpdated: {}
   };
 
   // ---------- Quyền ----------
@@ -88,9 +94,11 @@
     const json = JSON.stringify(val);
     if (json.length > 4500000) { showSaveError(key + ' (dữ liệu quá lớn, ảnh logo/banner nên dưới ~1MB)'); return false; }
     try {
-      const { error } = await sb.from('bc_data').upsert({ key, value: val });
+      const nowStr = new Date().toISOString();
+      const { error } = await sb.from('bc_data').upsert({ key, value: val, updated_at: nowStr });
       if (error) throw error;
       state.saveError = null;
+      state.lastUpdated[key] = nowStr;
       return true;
     } catch(e) {
       console.error('Lưu thất bại', key, e);
@@ -104,9 +112,13 @@
   }
   async function loadKey(key, fallback){
     try {
-      const { data, error } = await sb.from('bc_data').select('value').eq('key', key).maybeSingle();
+      const { data, error } = await sb.from('bc_data').select('value, updated_at').eq('key', key).maybeSingle();
       if (error) throw error;
-      return data ? data.value : fallback;
+      if (data) {
+        state.lastUpdated[key] = data.updated_at;
+        return data.value;
+      }
+      return fallback;
     } catch(e) { console.error('Đọc thất bại', key, e); return fallback; }
   }
   const saveMembers = () => save('bc_members', state.members);
@@ -117,60 +129,110 @@
   const saveFund = () => save('bc_fund', state.fund);
   const saveDonations = () => save('bc_donations', state.donations);
 
-  // Luôn lấy bản mới nhất từ database trước khi sửa danh sách thành viên,
-  // để tránh 2 người sửa/đăng ký cùng lúc ghi đè làm mất dữ liệu của nhau.
-  // mutator(latestList) trả về list mới để lưu, hoặc null để hủy (ví dụ validate lỗi).
-  let paymentsMutating = false;
-  async function mutatePayments(mutator){
-    while (paymentsMutating) { await new Promise(r => setTimeout(r, 150)); }
-    paymentsMutating = true;
-    try {
-      const latest = await loadKey('bc_payments', state.payments || {});
-      const updated = mutator(latest);
-      if (updated === null) return false;
-      state.payments = updated;
-      return await save('bc_payments', updated);
-    } finally { paymentsMutating = false; }
+  function isMonthLocked(month) {
+    return (state.settings.lockedMonths || []).includes(month);
   }
-  let fundMutating = false;
-  async function mutateFund(mutator){
-    while (fundMutating) { await new Promise(r => setTimeout(r, 150)); }
-    fundMutating = true;
-    try {
-      const latest = await loadKey('bc_fund', state.fund || {});
-      const updated = mutator(latest);
-      if (updated === null) return false;
-      state.fund = updated;
-      return await save('bc_fund', updated);
-    } finally { fundMutating = false; }
-  }
-  let donationsMutating = false;
-  async function mutateDonations(mutator){
-    while (donationsMutating) { await new Promise(r => setTimeout(r, 150)); }
-    donationsMutating = true;
-    try {
-      const latest = await loadKey('bc_donations', state.donations || []);
-      const updated = mutator(latest);
-      if (updated === null) return false;
-      state.donations = updated;
-      return await save('bc_donations', updated);
-    } finally { donationsMutating = false; }
-  }
-  let membersMutating = false;
-  async function mutateMembers(mutator){
-    while (membersMutating) { await new Promise(r => setTimeout(r, 150)); }
-    membersMutating = true;
-    try {
-      const latest = await loadKey('bc_members', state.members || []);
-      const updated = mutator(latest);
-      if (updated === null) return false;
-      state.members = updated;
-      resolveMe();
-      const ok = await save('bc_members', updated);
-      return ok;
-    } finally {
-      membersMutating = false;
+  async function toggleMonthLock(month) {
+    if (!state.settings.lockedMonths) state.settings.lockedMonths = [];
+    if (state.settings.lockedMonths.includes(month)) {
+      state.settings.lockedMonths = state.settings.lockedMonths.filter(m => m !== month);
+    } else {
+      state.settings.lockedMonths.push(month);
     }
+    await saveSettings();
+    render();
+  }
+
+  // Helper cho ghi dữ liệu có kiểm tra xung đột đồng thời (Optimistic Concurrency Control)
+  async function mutateKey(key, mutator, fallbackVal) {
+    const maxRetries = 3;
+    for (let attempt = 1; attempt <= maxRetries; attempt++) {
+      try {
+        const { data, error } = await sb.from('bc_data')
+          .select('value, updated_at')
+          .eq('key', key)
+          .maybeSingle();
+        
+        if (error) throw error;
+        
+        const latestVal = data ? data.value : fallbackVal;
+        const lastKnownUpdated = data ? data.updated_at : null;
+        
+        const updatedVal = mutator(latestVal);
+        if (updatedVal === null) return null;
+        
+        const nowStr = new Date().toISOString();
+        let success = false;
+        
+        if (!data) {
+          const { data: insertData, error: insertError } = await sb.from('bc_data')
+            .insert({ key, value: updatedVal, updated_at: nowStr })
+            .select();
+          if (insertError) throw insertError;
+          if (insertData && insertData.length > 0) {
+            success = true;
+          }
+        } else {
+          let query = sb.from('bc_data')
+            .update({ value: updatedVal, updated_at: nowStr })
+            .eq('key', key);
+          
+          if (lastKnownUpdated) {
+            query = query.eq('updated_at', lastKnownUpdated);
+          } else {
+            query = query.is('updated_at', null);
+          }
+          
+          const { data: updateData, error: updateError } = await query.select();
+          if (updateError) throw updateError;
+          if (updateData && updateData.length > 0) {
+            success = true;
+          }
+        }
+        
+        if (success) {
+          state.lastUpdated[key] = nowStr;
+          return updatedVal;
+        } else {
+          console.warn(`Xung đột đồng thời khi ghi key "${key}". Thử lại lần ${attempt}...`);
+          await new Promise(r => setTimeout(r, 100 + Math.random() * 150));
+        }
+      } catch (e) {
+        console.error(`Lỗi mutate key "${key}" lần thử ${attempt}:`, e);
+        if (attempt === maxRetries) {
+          showSaveError(key);
+          return null;
+        }
+        await new Promise(r => setTimeout(r, 200 * attempt));
+      }
+    }
+    return null;
+  }
+
+  async function mutatePayments(mutator){
+    const updated = await mutateKey('bc_payments', mutator, {});
+    if (updated === null) return false;
+    state.payments = updated;
+    return true;
+  }
+  async function mutateFund(mutator){
+    const updated = await mutateKey('bc_fund', mutator, {});
+    if (updated === null) return false;
+    state.fund = updated;
+    return true;
+  }
+  async function mutateDonations(mutator){
+    const updated = await mutateKey('bc_donations', mutator, []);
+    if (updated === null) return false;
+    state.donations = updated;
+    return true;
+  }
+  async function mutateMembers(mutator){
+    const updated = await mutateKey('bc_members', mutator, []);
+    if (updated === null) return false;
+    state.members = updated;
+    resolveMe();
+    return true;
   }
 
   // Dữ liệu riêng từng máy (đăng nhập, nhớ mật khẩu) lưu bằng localStorage của trình duyệt
@@ -180,17 +242,57 @@
   const saveRemember = (data) => lsSet('bc_remember', data);
 
   async function loadAll(){
-    state.members = await loadKey('bc_members', []);
-    state.courts = await loadKey('bc_courts', []);
-    state.sessions = await loadKey('bc_sessions', []);
-    state.settings = Object.assign({ casualMultiplier: 1.5, logoUrl: '', bannerUrl: '' }, await loadKey('bc_settings', {}));
-    state.payments = await loadKey('bc_payments', {});
-    state.fund = await loadKey('bc_fund', {});
-    state.donations = await loadKey('bc_donations', []);
+    try {
+      const { data, error } = await sb.from('bc_data').select('key, value, updated_at');
+      if (error) throw error;
+      
+      const dbMap = {};
+      if (data) {
+        data.forEach(row => {
+          dbMap[row.key] = row.value;
+          state.lastUpdated[row.key] = row.updated_at;
+        });
+      }
+      
+      state.members = dbMap['bc_members'] || [];
+      state.courts = dbMap['bc_courts'] || [];
+      state.sessions = dbMap['bc_sessions'] || [];
+      state.settings = Object.assign({ casualMultiplier: 1.5, logoUrl: '', bannerUrl: '', lockedMonths: [] }, dbMap['bc_settings'] || {});
+      state.payments = dbMap['bc_payments'] || {};
+      state.fund = dbMap['bc_fund'] || {};
+      state.donations = dbMap['bc_donations'] || [];
+    } catch (e) {
+      console.error('loadAll thất bại, chuyển sang load tuần tự', e);
+      state.members = await loadKey('bc_members', []);
+      state.courts = await loadKey('bc_courts', []);
+      state.sessions = await loadKey('bc_sessions', []);
+      state.settings = Object.assign({ casualMultiplier: 1.5, logoUrl: '', bannerUrl: '', lockedMonths: [] }, await loadKey('bc_settings', {}));
+      state.payments = await loadKey('bc_payments', {});
+      state.fund = await loadKey('bc_fund', {});
+      state.donations = await loadKey('bc_donations', []);
+    }
+
+    // Tự động kiểm tra và di cư (băm) mật khẩu cũ
+    let migrated = false;
+    if (state.members && state.members.length > 0) {
+      for (let m of state.members) {
+        if (m.password && m.password.length < 64) {
+          m.password = await hashPassword(m.password, m.username);
+          migrated = true;
+        }
+      }
+      if (migrated) {
+        await saveMembers();
+      }
+    }
+
     state.myUsername = lsGet('bc_my_username');
     state.rememberData = lsGet('bc_remember');
     if (!state.myUsername && state.rememberData && state.rememberData.username) {
-      const found = state.members.find(m => normUsername(m.username) === normUsername(state.rememberData.username) && m.password === state.rememberData.password);
+      const passwordHash = state.rememberData.password && state.rememberData.password.length < 64 
+        ? await hashPassword(state.rememberData.password, state.rememberData.username)
+        : state.rememberData.password;
+      const found = state.members.find(m => normUsername(m.username) === normUsername(state.rememberData.username) && m.password === passwordHash);
       if (found) state.myUsername = found.username;
     }
     resolveMe();
@@ -199,8 +301,14 @@
   function resolveMe(){
     if (!state.myUsername) { state.me = null; return; }
     const found = state.members.find(m => normUsername(m.username) === normUsername(state.myUsername));
-    // Không cho thành viên chưa được duyệt (pending) vào app
-    if (found && found.status === 'pending') { state.me = null; return; }
+    if (found && found.status === 'pending') {
+      state.authError = 'Tài khoản của bạn đang chờ phê duyệt. Vui lòng liên hệ Admin/R1!';
+      state.authMode = 'login';
+      state.me = null;
+      state.myUsername = null;
+      saveMyUsername();
+      return;
+    }
     state.me = found || null;
     if (!found) state.myUsername = null;
   }
@@ -213,7 +321,11 @@
 
   function computeShares(s){
     const mKey = sessionMonthKey(s);
-    const yesNames = Object.entries(s.votes).filter(([,v]) => v === 'yes').map(([name]) => name);
+    const activeNames = state.members.map(m => m.name);
+    const yesNames = Object.entries(s.votes)
+      .filter(([,v]) => v === 'yes')
+      .map(([name]) => name)
+      .filter(name => activeNames.includes(name));
     let fixedNames = yesNames.filter(n => memberType(n, mKey) === 'fixed');
     let casualNames = yesNames.filter(n => memberType(n, mKey) !== 'fixed');
 
@@ -264,7 +376,6 @@
   // ---------- RENDER ROOT ----------
   function render(){
     const root = document.getElementById('root');
-    try {
     root.innerHTML = '';
     if (!state.me) {
       root.appendChild(renderAuth());
@@ -284,15 +395,6 @@
     if (state.tab === 'members') root.appendChild(renderMembers());
     if (state.tab === 'courts') root.appendChild(renderCourts());
     if (state.tab === 'fund') root.appendChild(renderFund());
-    if (state.tab === 'approve') root.appendChild(renderApprove());
-    } catch(err) {
-      console.error('Render error:', err);
-      root.innerHTML = '';
-      const errDiv = document.createElement('div');
-      errDiv.style.cssText = 'padding:2rem; background:#FAECE7; border-radius:12px; margin:1rem; font-family:monospace; font-size:13px; color:#993C1D;';
-      errDiv.innerHTML = '<strong>Lỗi hiển thị:</strong><br>' + err.message + '<br><br><small>' + (err.stack||'').split('\n').slice(0,4).join('<br>') + '</small><br><br><button onclick="window.location.reload()" style="padding:8px 16px; background:#1B4332; color:#fff; border:none; border-radius:8px; cursor:pointer;">Tải lại trang</button>';
-      root.appendChild(errDiv);
-    }
   }
 
   // ---------- AUTH ----------
@@ -309,17 +411,6 @@
     head.appendChild(el(`<h1 style="font-size:20px; color:#1B4332;">Hội cầu lông</h1>`));
     head.appendChild(el(`<p style="font-size:13px; color:#8a877d; margin-top:4px;">Đăng nhập bằng email và mật khẩu để vote, đăng ký lịch và xem chi phí.</p>`));
     wrap.appendChild(head);
-
-    if (state.authMode === 'pending_notice') {
-      wrap.appendChild(el(`<div class="bc-card" style="text-align:center; padding:2rem 1rem;">
-        <div style="font-size:2.5rem; margin-bottom:12px;">⏳</div>
-        <h3 style="font-size:16px; color:#1B4332; margin-bottom:8px;">Đăng ký thành công!</h3>
-        <p style="font-size:14px; color:#6b7a73; margin-bottom:16px;">Tài khoản của bạn đang chờ <strong>Admin hoặc R1</strong> phê duyệt.<br>Sau khi được duyệt, bạn có thể đăng nhập và sử dụng app bình thường.</p>
-        <button class="bc-btn outline small" id="back-to-login">Quay lại đăng nhập</button>
-      </div>`));
-      setTimeout(() => { document.getElementById('back-to-login').onclick = () => { state.authMode = 'login'; render(); }; }, 0);
-      return wrap;
-    }
 
     const tabs = el(`<div style="display:flex; gap:6px; justify-content:center; margin-bottom:1rem;">
       <div class="bc-tab ${state.authMode==='login'?'active':''}" data-mode="login">Đăng nhập</div>
@@ -369,10 +460,10 @@
         state.members = await loadKey('bc_members', state.members);
         const found = state.members.find(m => normUsername(m.username) === username);
         if (!found) { state.authError = 'Không tìm thấy tên đăng nhập này.'; render(); return; }
-        if (found.password !== password) { state.authError = 'Sai mật khẩu.'; render(); return; }
-        if (found.status === 'pending') { state.authError = '⏳ Tài khoản của bạn đang chờ Admin/R1 phê duyệt. Vui lòng chờ và thử lại sau.'; render(); return; }
+        const passwordHash = await hashPassword(password, username);
+        if (found.password !== passwordHash) { state.authError = 'Sai mật khẩu.'; render(); return; }
         state.myUsername = found.username; state.authError = ''; saveMyUsername();
-        if (remember) { state.rememberData = { username: found.username, password }; saveRemember(state.rememberData); }
+        if (remember) { state.rememberData = { username: found.username, password: passwordHash }; saveRemember(state.rememberData); }
         else { state.rememberData = null; saveRemember(null); }
         resolveMe(); render();
       };
@@ -390,29 +481,22 @@
         if (!/^[a-z0-9_.]+$/.test(username)) { state.authError = 'Tên đăng nhập chỉ gồm chữ, số, dấu chấm/gạch dưới, không dấu cách.'; render(); return; }
         if (!pw1 || pw1.length < 4) { state.authError = 'Mật khẩu cần ít nhất 4 ký tự.'; render(); return; }
         if (pw1 !== pw2) { state.authError = 'Hai mật khẩu không khớp.'; render(); return; }
+        const passwordHash = await hashPassword(pw1, username);
         let regError = '';
         const ok = await mutateMembers(latest => {
           if (latest.some(m => normUsername(m.username) === username)) { regError = 'Tên đăng nhập này đã được dùng, hãy chọn tên khác.'; return null; }
           if (latest.some(m => normEmail(m.email) === email)) { regError = 'Email này đã đăng ký, hãy chọn Đăng nhập.'; return null; }
           if (latest.length >= MAX_MEMBERS) { regError = 'Nhóm đã đạt giới hạn ' + MAX_MEMBERS + ' thành viên.'; return null; }
           const isFirst = latest.length === 0;
-          const isKiet = username === PROTECTED_USERNAME;
           const newMember = {
-            id: uid(), name, username, email, phone, level, password: pw1,
-            status: (isFirst || isKiet) ? 'active' : 'pending',
-            role: (isFirst || isKiet) ? 'admin' : 'r2',
+            id: uid(), name, username, email, phone, level, password: passwordHash,
+            status: isFirst ? 'active' : 'pending',
+            role: isFirst ? 'admin' : 'r2',
             monthlyType: {}, avatarUrl: ''
           };
           return latest.concat([newMember]);
         });
         if (!ok) { state.authError = regError || 'Đăng ký thất bại, vui lòng thử lại.'; render(); return; }
-        const newMe = state.members.find(m => normUsername(m.username) === username);
-        if (newMe && newMe.status === 'pending') {
-          state.myUsername = null; saveMyUsername();
-          state.authError = '';
-          state.authMode = 'pending_notice';
-          render(); return;
-        }
         state.myUsername = username; state.authError = ''; saveMyUsername(); resolveMe(); render();
       };
     }, 0);
@@ -435,7 +519,12 @@
       </div>
     </div>`);
     setTimeout(() => {
-      document.getElementById('bc-logout').onclick = () => { state.myUsername = null; state.me = null; saveMyUsername(); render(); };
+      document.getElementById('bc-logout').onclick = () => {
+        state.myUsername = null;
+        state.me = null;
+        saveMyUsername();
+        render();
+      };
       const refreshBtn = document.getElementById('bc-refresh');
       refreshBtn.onclick = async () => {
         refreshBtn.textContent = 'Đang tải...';
@@ -447,12 +536,8 @@
 
   function renderTabs(){
     const wrap = el(`<div style="display:flex; gap:6px; margin-bottom:1rem; border-bottom:1px solid #E3E0D6; padding-bottom:0.75rem;"></div>`);
-    const tabs = [['sessions','Lịch đánh'],['members','Thành viên'],['courts','Sân cầu'],['fund','Quỹ & chi phí']];
-    if (canManage()) tabs.push(['approve','Duyệt thành viên']);
-    tabs.forEach(([key,label]) => {
-      const pendingCount = key === 'approve' ? state.members.filter(m => m.status === 'pending').length : 0;
-      const badgeHtml = pendingCount > 0 ? ` <span style="background:#993C1D; color:#fff; font-size:11px; padding:1px 6px; border-radius:999px;">${pendingCount}</span>` : '';
-      const t = el(`<div class="bc-tab ${state.tab===key?'active':''}">${label}${badgeHtml}</div>`);
+    [['sessions','Lịch đánh'],['members','Thành viên'],['courts','Sân cầu'],['fund','Quỹ & chi phí']].forEach(([key,label]) => {
+      const t = el(`<div class="bc-tab ${state.tab===key?'active':''}">${label}</div>`);
       t.onclick = () => { state.tab = key; render(); refreshAll(); };
       wrap.appendChild(t);
     });
@@ -462,12 +547,19 @@
   // ---------- MEMBERS ----------
   function renderMembers(){
     const wrap = el(`<div></div>`);
+    const locked = isMonthLocked(state.viewMonth);
+
     if (!canManage()) {
       // R2: chỉ thấy thông tin của chính mình, không thấy thành viên khác
+      const lockBadge = locked
+        ? `<span class="bc-badge" style="background:#FAECE7; color:#993C1D; margin-left:6px;">🔒 Đăng ký đã chốt</span>`
+        : `<span class="bc-badge" style="background:#EAF3DE; color:#27500A; margin-left:6px;">🔓 Đăng ký đang mở</span>`;
+
       wrap.appendChild(el(`<div style="font-size:12px; color:#8a877d; margin-bottom:0.5rem;">Bạn đang ở vai trò R2: chỉ thấy thông tin của chính mình. Tự đăng ký Cố định/Vãng lai theo từng tháng ở dưới.</div>`));
       const selfMonth = el(`<div style="display:flex; align-items:center; gap:6px; margin-bottom:0.75rem;">
         <span style="font-size:13px; color:#8a877d;">Tháng xem:</span>
         <input class="bc-input" type="month" id="mb-view-month-self" value="${state.viewMonth}" style="width:140px; padding:4px 8px;" />
+        ${lockBadge}
       </div>`);
       wrap.appendChild(selfMonth);
       const myRow = state.members.find(m => state.me && m.id === state.me.id);
@@ -479,12 +571,14 @@
     }
 
     const activeCount = state.members.filter(m=>m.status==='active').length;
-    const inactiveCount = state.members.length - activeCount;
+    const pendingCount = state.members.filter(m=>m.status==='pending').length;
+    const inactiveCount = state.members.length - activeCount - pendingCount;
     const registeredThisMonth = state.members.filter(m => (m.monthlyType||{})[state.viewMonth] === 'fixed').length;
 
     wrap.appendChild(el(`<div class="bc-card" style="background:#F4F1EA; display:flex; gap:18px; flex-wrap:wrap; font-size:13px; color:#6b7a73;">
       <span><strong style="color:#1B4332; font-weight:500;">${state.members.length}/${MAX_MEMBERS}</strong> tổng</span>
       <span><strong style="color:#27500A; font-weight:500;">${activeCount}</strong> hoạt động</span>
+      <span><strong style="color:#854F0B; font-weight:500;">${pendingCount}</strong> chờ duyệt</span>
       <span><strong style="color:#993C1D; font-weight:500;">${inactiveCount}</strong> ngưng hoạt động</span>
       <span><strong style="color:#1B4332; font-weight:500;">${registeredThisMonth}</strong> đăng ký cố định ${monthLabel(state.viewMonth)}</span>
     </div>`));
@@ -515,12 +609,13 @@
           const level = document.getElementById('mb-level').value;
           const phone = document.getElementById('mb-phone').value.trim();
           const tempPw = Math.random().toString(36).slice(2,8);
+          const passwordHash = await hashPassword(tempPw, username);
           let err = '';
           const ok = await mutateMembers(latest => {
             if (latest.some(m => normUsername(m.username) === username)) { err = 'Username đã tồn tại.'; return null; }
             if (latest.some(m => normEmail(m.email) === email)) { err = 'Email đã tồn tại.'; return null; }
             if (latest.length >= MAX_MEMBERS) { err = 'Đã đạt giới hạn ' + MAX_MEMBERS + ' thành viên.'; return null; }
-            return latest.concat([{ id: uid(), name, username, email, phone, level, password: tempPw, status: 'active', role: 'r2', monthlyType: {}, avatarUrl: '' }]);
+            return latest.concat([{ id: uid(), name, username, email, phone, level, password: passwordHash, status: 'active', role: 'r2', monthlyType: {}, avatarUrl: '' }]);
           });
           if (!ok) { alert(err || 'Thêm thất bại, thử lại.'); return; }
           render();
@@ -529,14 +624,23 @@
       }, 0);
     }
 
+    const lockBtn = `<button class="bc-btn small ${locked ? 'outline' : 'danger'}" id="mb-lock-btn" style="padding:5px 12px; font-size:13px;">${locked ? '🔓 Mở đăng ký' : '🔒 Chốt đăng ký'}</button>`;
+    const statusTabs = [
+      ['all', 'Tất cả'],
+      ['active', 'Hoạt động'],
+      ['pending', `Chờ duyệt ${pendingCount > 0 ? `<span style="background:#993C1D; color:#FFF; border-radius:50%; padding:1px 5px; font-size:10px; margin-left:3px;">${pendingCount}</span>` : ''}`],
+      ['inactive', 'Ngưng hoạt động']
+    ];
+
     const filterBar = el(`<div style="display:flex; gap:6px; margin-bottom:0.75rem; flex-wrap:wrap; align-items:center;">
       <div style="display:flex; gap:6px; flex-wrap:wrap;">
-        ${[['all','Tất cả'],['active','Hoạt động'],['inactive','Ngưng hoạt động']].map(([k,l]) =>
+        ${statusTabs.map(([k,l]) =>
           `<div class="bc-tab ${state.memberFilter===k?'active':''}" data-filter="${k}" style="font-size:13px; padding:5px 12px;">${l}</div>`).join('')}
       </div>
       <div style="margin-left:auto; display:flex; align-items:center; gap:6px; flex-wrap:wrap;">
         <span style="font-size:13px; color:#8a877d;">Tháng xem:</span>
         <input class="bc-input" type="month" id="mb-view-month" value="${state.viewMonth}" style="width:140px; padding:4px 8px;" />
+        ${lockBtn}
       </div>
     </div>`);
     wrap.appendChild(filterBar);
@@ -585,6 +689,15 @@
     setTimeout(() => {
       document.getElementById('mb-view-month').onchange = (e) => { state.viewMonth = e.target.value || monthKey(); render(); };
       filterBar.querySelectorAll('[data-filter]').forEach(n => n.onclick = () => { state.memberFilter = n.dataset.filter; state.memberVisibleCount = 0; render(); });
+      const mbLockBtn = document.getElementById('mb-lock-btn');
+      if (mbLockBtn) {
+        mbLockBtn.onclick = async () => {
+          const isLocked = isMonthLocked(state.viewMonth);
+          if (confirm(`${isLocked ? 'Mở chốt' : 'Chốt'} đăng ký cho tháng ${monthLabel(state.viewMonth)}?`)) {
+            await toggleMonthLock(state.viewMonth);
+          }
+        };
+      }
       const mbSearch = document.getElementById('mb-search');
       const mbSearchBtn = document.getElementById('mb-search-btn');
       const doSearch = () => { state.memberSearch = document.getElementById('mb-search').value; state.memberVisibleCount = 0; render(); };
@@ -608,10 +721,12 @@
     const [lbg, lfg] = LEVEL_COLOR[m.level] || ["#F1EFE8","#444441"];
     const [rbg, rfg] = ROLE_COLOR[m.role] || ["#F1EFE8","#444441"];
     const isSelf = state.me && state.me.id === m.id;
-    const editable = canManage() || isSelf; // ai sửa được loại đăng ký tháng của dòng này
+    const locked = isMonthLocked(state.viewMonth);
+    const editable = canManage() || (isSelf && !locked); // ai sửa được loại đăng ký tháng của dòng này
     const curType = (m.monthlyType||{})[state.viewMonth] || '';
-    const statusBg = m.status === 'active' ? '#EAF3DE' : '#FAECE7';
-    const statusFg = m.status === 'active' ? '#27500A' : '#993C1D';
+    const statusBg = m.status === 'active' ? '#EAF3DE' : (m.status === 'pending' ? '#FAEEDA' : '#FAECE7');
+    const statusFg = m.status === 'active' ? '#27500A' : (m.status === 'pending' ? '#854F0B' : '#993C1D');
+    const statusLabel = m.status === 'active' ? 'Hoạt động' : (m.status === 'pending' ? 'Chờ duyệt' : 'Ngưng hoạt động');
 
     const row = el(`<div class="bc-card" style="padding:0.7rem 1rem;">
       <div style="display:flex; align-items:flex-start; justify-content:space-between; flex-wrap:wrap; gap:6px;">
@@ -622,7 +737,7 @@
             ${isSelf ? `<span class="bc-badge" style="background:#E6F1FB; color:#0C447C; margin-left:6px;">Bạn</span>` : ''}
             <span class="bc-badge" style="background:${lbg}; color:${lfg}; margin-left:6px;">${m.level}</span>
             <span class="bc-badge" style="background:${rbg}; color:${rfg}; margin-left:6px;">${ROLE_LABEL[m.role]}</span>
-            <span class="bc-badge" style="background:${statusBg}; color:${statusFg}; margin-left:6px;">${m.status === 'active' ? 'Hoạt động' : 'Ngưng hoạt động'}</span>
+            <span class="bc-badge" style="background:${statusBg}; color:${statusFg}; margin-left:6px;">${statusLabel}</span>
             <div style="font-size:12px; color:#8a877d; margin-top:3px;">@${escapeHtml(m.username || '')} · ${escapeHtml(m.email)}${m.phone ? ' · ' + escapeHtml(m.phone) : ''}</div>
             ${isSelf ? `<div style="margin-top:6px;"><input type="file" accept="image/*" id="avatar-input-${m.id}" style="font-size:12px;" /></div>` : ''}
             ${isSelf ? `<div style="margin-top:8px; display:flex; gap:6px; flex-wrap:wrap; align-items:center;">
@@ -649,72 +764,76 @@
     row.querySelector(`#avatar-box-${m.id}`).innerHTML = avatarHtml(m, 36);
 
     const actions = row.querySelector(`#row-actions-${m.id}`);
-    const protected_ = isProtected(m);
-
-    if (canManage() && !protected_) {
-      const statusBtn = el(`<button class="bc-btn outline small">${m.status==='active' ? 'Ngưng hoạt động' : 'Mở lại hoạt động'}</button>`);
-      statusBtn.onclick = async () => {
-        await mutateMembers(latest => latest.map(x => x.id === m.id ? Object.assign({}, x, { status: x.status === 'active' ? 'inactive' : 'active' }) : x));
+    if (canManage()) {
+      if (m.status === 'pending') {
+        const approveBtn = el(`<button class="bc-btn small" style="background:#27500A; border-color:#27500A; color:#FFF; font-weight:500;">Chấp nhận</button>`);
+        approveBtn.onclick = async () => {
+          await mutateMembers(latest => latest.map(x => x.id === m.id ? Object.assign({}, x, { status: 'active' }) : x));
+          render();
+        };
+        actions.appendChild(approveBtn);
+        
+        const rejectBtn = el(`<button class="bc-btn danger small">Xoá</button>`);
+        rejectBtn.onclick = async () => {
+          if (!confirm(`Từ chối và xoá đăng ký của ${m.name}?`)) return;
+          await mutateMembers(latest => latest.filter(x => x.id !== m.id));
+          render();
+        };
+        actions.appendChild(rejectBtn);
+      } else {
+        const statusBtn = el(`<button class="bc-btn outline small">${m.status==='active' ? 'Ngưng hoạt động' : 'Mở lại hoạt động'}</button>`);
+        statusBtn.onclick = async () => {
+          await mutateMembers(latest => latest.map(x => x.id === m.id ? Object.assign({}, x, { status: x.status === 'active' ? 'inactive' : 'active' }) : x));
+          render();
+        };
+        actions.appendChild(statusBtn);
+      }
+    }
+    if (isAdmin() && m.status !== 'pending') {
+      const roleSel = el(`<select class="bc-select" style="width:90px; padding:5px 6px;">
+        <option value="r2" ${m.role==='r2'?'selected':''}>R2</option>
+        <option value="r1" ${m.role==='r1'?'selected':''}>R1</option>
+        <option value="admin" ${m.role==='admin'?'selected':''}>Admin</option>
+      </select>`);
+      roleSel.onchange = async (e) => {
+        const newRole = e.target.value;
+        const ok = await mutateMembers(latest => {
+          const target = latest.find(x => x.id === m.id);
+          if (!target) return null;
+          if (target.role === 'admin' && newRole !== 'admin') {
+            const otherAdmins = latest.filter(x => x.role === 'admin' && x.id !== m.id).length;
+            if (otherAdmins === 0) return null;
+          }
+          return latest.map(x => x.id === m.id ? Object.assign({}, x, { role: newRole }) : x);
+        });
+        if (!ok) alert('Không thể chuyển quyền: cần giữ ít nhất 1 thành viên Admin trong nhóm.');
         render();
       };
-      actions.appendChild(statusBtn);
-    }
-    if (isAdmin()) {
-      if (!protected_) {
-        const roleSel = el(`<select class="bc-select" style="width:90px; padding:5px 6px;">
-          <option value="r2" ${m.role==='r2'?'selected':''}>R2</option>
-          <option value="r1" ${m.role==='r1'?'selected':''}>R1</option>
-          <option value="admin" ${m.role==='admin'?'selected':''}>Admin</option>
-        </select>`);
-        roleSel.onchange = async (e) => {
-          const newRole = e.target.value;
-          const ok = await mutateMembers(latest => {
-            const target = latest.find(x => x.id === m.id);
-            if (!target) return null;
-            if (target.role === 'admin' && newRole !== 'admin') {
-              const otherAdmins = latest.filter(x => x.role === 'admin' && x.id !== m.id).length;
-              if (otherAdmins === 0) return null;
-            }
-            return latest.map(x => x.id === m.id ? Object.assign({}, x, { role: newRole }) : x);
-          });
-          if (!ok) alert('Không thể chuyển quyền: cần giữ ít nhất 1 thành viên Admin trong nhóm.');
-          render();
-        };
-        actions.appendChild(roleSel);
-      } else {
-        actions.appendChild(el(`<span class="bc-badge" style="background:#FAEEDA; color:#854F0B;">🔒 Admin cố định</span>`));
-      }
-
-      // Reset mật khẩu: với kietdmt chỉ cho phép chính họ hoặc admin khác
-      const canReset = !protected_ || canResetProtected();
-      if (canReset) {
-        const resetBtn = el(`<button class="bc-btn outline small">Reset mật khẩu</button>`);
-        resetBtn.onclick = async () => {
-          const newPw = prompt(`Đặt mật khẩu mới cho ${m.name}:`);
-          if (!newPw) return;
-          if (newPw.length < 4) { alert('Mật khẩu cần ít nhất 4 ký tự.'); return; }
-          await mutateMembers(latest => latest.map(x => x.id === m.id ? Object.assign({}, x, { password: newPw }) : x));
-          alert(`Đã đặt lại mật khẩu cho ${m.name}. Hãy báo mật khẩu mới cho họ.`);
-        };
-        actions.appendChild(resetBtn);
-      }
-
-      if (!protected_) {
-        const delBtn = el(`<button class="bc-btn danger small">Xoá</button>`);
-        delBtn.onclick = async () => {
-          if (!confirm(`Xoá thành viên ${m.name}?`)) return;
-          let blocked = false;
-          const ok = await mutateMembers(latest => {
-            const target = latest.find(x => x.id === m.id);
-            if (target && target.role === 'admin' && latest.filter(x => x.role === 'admin').length === 1) { blocked = true; return null; }
-            return latest.filter(x => x.id !== m.id);
-          });
-          if (blocked) { alert('Không thể xoá: đây là Admin duy nhất của nhóm.'); return; }
-          if (ok && state.me && state.me.id === m.id) { state.myUsername = null; state.me = null; saveMyUsername(); }
-          render();
-        };
-        actions.appendChild(delBtn);
-      }
+      actions.appendChild(roleSel);
+      const resetBtn = el(`<button class="bc-btn outline small">Reset mật khẩu</button>`);
+      resetBtn.onclick = async () => {
+        const newPw = prompt(`Đặt mật khẩu mới cho ${m.name}:`);
+        if (!newPw) return;
+        if (newPw.length < 4) { alert('Mật khẩu cần ít nhất 4 ký tự.'); return; }
+        const passwordHash = await hashPassword(newPw, m.username);
+        await mutateMembers(latest => latest.map(x => x.id === m.id ? Object.assign({}, x, { password: passwordHash }) : x));
+        alert(`Đã đặt lại mật khẩu cho ${m.name}. Hãy báo mật khẩu mới cho họ.`);
+      };
+      actions.appendChild(resetBtn);
+      const delBtn = el(`<button class="bc-btn danger small">Xoá</button>`);
+      delBtn.onclick = async () => {
+        if (!confirm(`Xoá thành viên ${m.name}?`)) return;
+        let blocked = false;
+        const ok = await mutateMembers(latest => {
+          const target = latest.find(x => x.id === m.id);
+          if (target && target.role === 'admin' && latest.filter(x => x.role === 'admin').length === 1) { blocked = true; return null; }
+          return latest.filter(x => x.id !== m.id);
+        });
+        if (blocked) { alert('Không thể xoá: đây là Admin duy nhất của nhóm.'); return; }
+        if (ok && state.me && state.me.id === m.id) { state.myUsername = null; state.me = null; saveMyUsername(); }
+        render();
+      };
+      actions.appendChild(delBtn);
     }
 
     setTimeout(() => {
@@ -750,15 +869,19 @@
         if (!oldPw || !newPw) { msg.style.color = '#993C1D'; msg.textContent = 'Nhập đủ thông tin.'; return; }
         if (newPw.length < 4) { msg.style.color = '#993C1D'; msg.textContent = 'Mật khẩu mới cần ≥4 ký tự.'; return; }
         if (newPw !== newPw2) { msg.style.color = '#993C1D'; msg.textContent = 'Mật khẩu mới không khớp.'; return; }
+        
+        const oldPwHash = await hashPassword(oldPw, m.username);
+        const newPwHash = await hashPassword(newPw, m.username);
         let err = '';
         const ok = await mutateMembers(latest => {
           const target = latest.find(x => x.id === m.id);
-          if (!target || target.password !== oldPw) { err = 'Sai mật khẩu hiện tại.'; return null; }
-          return latest.map(x => x.id === m.id ? Object.assign({}, x, { password: newPw }) : x);
+          if (!target || target.password !== oldPwHash) { err = 'Sai mật khẩu hiện tại.'; return null; }
+          return latest.map(x => x.id === m.id ? Object.assign({}, x, { password: newPwHash }) : x);
         });
         if (!ok) { msg.style.color = '#993C1D'; msg.textContent = err || 'Đổi thất bại.'; return; }
+        
         if (state.rememberData && normUsername(state.rememberData.username) === normUsername(m.username)) {
-          state.rememberData = { username: m.username, password: newPw }; saveRemember(state.rememberData);
+          state.rememberData = { username: m.username, password: newPwHash }; saveRemember(state.rememberData);
         }
         msg.style.color = '#27500A'; msg.textContent = 'Đã đổi mật khẩu thành công.';
       };
@@ -1124,54 +1247,6 @@
     return wrap;
   }
 
-  // ---------- DUYỆT THÀNH VIÊN ----------
-  function renderApprove(){
-    const wrap = el(`<div></div>`);
-    if (!canManage()) {
-      wrap.appendChild(el(`<div class="bc-empty">Chức năng này chỉ dành cho Admin và R1.</div>`));
-      return wrap;
-    }
-    const pending = state.members.filter(m => m.status === 'pending');
-    wrap.appendChild(el(`<h3 style="font-size:15px; color:#1B4332; margin-bottom:12px;">Phê duyệt thành viên mới</h3>`));
-    if (pending.length === 0) {
-      wrap.appendChild(el(`<div class="bc-card" style="text-align:center; padding:2rem; color:#8a877d;">
-        <div style="font-size:2rem; margin-bottom:8px;">✅</div>
-        <div style="font-size:14px;">Không có thành viên nào đang chờ duyệt.</div>
-      </div>`));
-      return wrap;
-    }
-    wrap.appendChild(el(`<div style="font-size:13px; color:#6b7a73; margin-bottom:12px;">Có <strong style="color:#993C1D;">${pending.length}</strong> thành viên đang chờ phê duyệt. Xem xét thông tin và chọn Chấp nhận hoặc Từ chối.</div>`));
-    pending.forEach(m => {
-      const card = el(`<div class="bc-card" style="border-left:3px solid #FAEEDA;">
-        <div style="display:flex; align-items:flex-start; gap:12px; flex-wrap:wrap;">
-          <div style="flex:1; min-width:200px;">
-            <div style="font-weight:500; font-size:15px;">${escapeHtml(m.name)}</div>
-            <div style="font-size:13px; color:#6b7a73; margin-top:2px;">@${escapeHtml(m.username||'')} · ${escapeHtml(m.email)}</div>
-            ${m.phone ? `<div style="font-size:13px; color:#8a877d;">📞 ${escapeHtml(m.phone)}</div>` : ''}
-            <div style="font-size:13px; color:#8a877d; margin-top:4px;">
-              Trình độ: <span class="bc-badge" style="background:#EAF3DE; color:#27500A;">${m.level||'—'}</span>
-            </div>
-          </div>
-          <div style="display:flex; gap:8px; align-items:flex-start; flex-wrap:wrap;">
-            <button class="bc-btn small" id="approve-${m.id}">✓ Chấp nhận</button>
-            <button class="bc-btn danger small" id="reject-${m.id}">✕ Từ chối & Xoá</button>
-          </div>
-        </div>
-      </div>`);
-      card.querySelector(`#approve-${m.id}`).onclick = async () => {
-        await mutateMembers(latest => latest.map(x => x.id === m.id ? Object.assign({}, x, { status: 'active' }) : x));
-        render();
-      };
-      card.querySelector(`#reject-${m.id}`).onclick = async () => {
-        if (!confirm(`Từ chối và xoá tài khoản của ${m.name}?`)) return;
-        await mutateMembers(latest => latest.filter(x => x.id !== m.id));
-        render();
-      };
-      wrap.appendChild(card);
-    });
-    return wrap;
-  }
-
   // ---------- SESSIONS ----------
   function renderSessions(){
     const wrap = el(`<div></div>`);
@@ -1411,12 +1486,28 @@
       const mKey = sessionMonthKey(s);
       s.passes = s.passes || {};
       const passes = s.passes;
-      const casualAttendees = state.members.filter(x => s.votes[x.name] === 'yes' && memberType(x.name, mKey) !== 'fixed');
+      const casualList = state.members.filter(x => memberType(x.name, mKey) !== 'fixed' && x.status === 'active' && s.votes[x.name] !== 'no');
       const lockedForOthers = s.locked && role() === 'r2';
+
+      // Xây dựng danh sách hiển thị gồm thành viên hiện tại + thành viên đã xoá có lịch sử vote
+      const currentNames = state.members.map(m => m.name);
+      const displayMembers = [...state.members];
+      Object.keys(s.votes).forEach(name => {
+        if (!currentNames.includes(name)) {
+          displayMembers.push({
+            id: 'deleted-' + name,
+            name: name,
+            isDeleted: true,
+            status: 'deleted',
+            level: 'Mới chơi',
+            role: 'r2'
+          });
+        }
+      });
 
       const tbl = el(`<table style="width:100%; font-size:13px; border-collapse:collapse;"></table>`);
       let hiddenCount = 0;
-      state.members.forEach(m => {
+      displayMembers.forEach(m => {
         const v = s.votes[m.name];
         const t = memberType(m.name, mKey);
         const hasPassed = t === 'fixed' && passes[m.id];
@@ -1425,8 +1516,11 @@
         // Khi buổi đã chốt: ẩn thành viên chưa vote
         if (s.locked && notVoted && !hasPassed) { hiddenCount++; return; }
 
+        const isReceiver = Object.values(passes).includes(m.id);
         const statusBadge = hasPassed
           ? `<span class="bc-badge" style="background:#FAEEDA; color:#854F0B;">Đã pass (tính vắng)</span>`
+          : isReceiver
+          ? `<span class="bc-badge" style="background:#E6F1FB; color:#0C447C;">Tham gia (Nhận pass)</span>`
           : v === 'yes'
           ? `<span class="bc-badge" style="background:#EAF3DE; color:#27500A;">Tham gia</span>`
           : v === 'no'
@@ -1434,13 +1528,21 @@
             : `<span class="bc-badge" style="background:#F1EFE8; color:#888780;">Chưa vote</span>`;
 
         let passCell = '';
-        if (t === 'fixed') {
+        if (m.isDeleted) {
+          passCell = `<span style="font-size:12px; color:#993C1D; font-style:italic;">Tài khoản đã xoá</span>`;
+        } else if (t === 'fixed') {
           const isSelfRow = state.me && state.me.id === m.id;
           const editable = canManage() || (isSelfRow && !lockedForOthers);
           if (editable) {
+            // Lọc loại trừ vãng lai đã nhận pass từ cố định khác
+            const otherPasses = Object.entries(passes)
+              .filter(([fid]) => fid !== m.id)
+              .map(([,cid]) => cid);
+            const availableCasuals = casualList.filter(c => !otherPasses.includes(c.id));
+
             passCell = `<select class="bc-select" id="pass-${s.id}-${m.id}" style="width:150px; padding:4px 6px; font-size:12px;">
               <option value="">Không pass</option>
-              ${casualAttendees.map(c => `<option value="${c.id}" ${passes[m.id]===c.id?'selected':''}>Pass cho ${escapeHtml(c.name)}</option>`).join('')}
+              ${availableCasuals.map(c => `<option value="${c.id}" ${passes[m.id]===c.id?'selected':''}>Pass cho ${escapeHtml(c.name)}</option>`).join('')}
             </select>`;
           } else if (passes[m.id]) {
             const target = state.members.find(x => x.id === passes[m.id]);
@@ -1454,9 +1556,13 @@
           }
         }
 
+        const nameLabel = m.isDeleted
+          ? `${escapeHtml(m.name)} <span style="font-size:11px; color:#993C1D; font-style:italic;">(Đã xoá)</span>`
+          : escapeHtml(m.name);
+
         tbl.appendChild(el(`<tr style="border-top:1px solid #F1EFE8;">
           <td style="padding:5px 4px; width:30px;">${avatarHtml(m, 26)}</td>
-          <td style="padding:5px 4px;">${escapeHtml(m.name)}</td>
+          <td style="padding:5px 4px;">${nameLabel}</td>
           <td style="padding:5px 4px; color:#8a877d;">${t === 'fixed' ? 'Cố định' : 'Vãng lai'}</td>
           <td style="padding:5px 4px;">${passCell}</td>
           <td style="padding:5px 4px; text-align:right;">${statusBadge}</td>
@@ -1468,12 +1574,24 @@
       }
 
       setTimeout(() => {
-        state.members.forEach(m => {
+        displayMembers.forEach(m => {
+          if (m.isDeleted) return;
           const sel = document.getElementById(`pass-${s.id}-${m.id}`);
           if (sel) sel.onchange = (e) => {
             const val = e.target.value;
             s.passes = s.passes || {};
-            if (val) s.passes[m.id] = val; else delete s.passes[m.id];
+            if (val) {
+              // Kiểm tra xem đã nhận pass từ người khác chưa
+              const alreadyTaken = Object.entries(s.passes).some(([fid, cid]) => fid !== m.id && cid === val);
+              if (alreadyTaken) {
+                alert('Thành viên vãng lai này đã nhận pass từ người khác!');
+                e.target.value = s.passes[m.id] || '';
+                return;
+              }
+              s.passes[m.id] = val;
+            } else {
+              delete s.passes[m.id];
+            }
             saveSessions(); render();
           };
         });
@@ -1669,36 +1787,111 @@
     }
     refreshing = true;
     try {
-      const [members, courts, sessions, settingsRaw, payments, fund, donations] = await Promise.all([
-        loadKey('bc_members', state.members),
-        loadKey('bc_courts', state.courts),
-        loadKey('bc_sessions', state.sessions),
-        loadKey('bc_settings', {}),
-        loadKey('bc_payments', state.payments),
-        loadKey('bc_fund', state.fund),
-        loadKey('bc_donations', state.donations),
-      ]);
-      state.members = members;
-      state.courts = courts;
-      state.sessions = sessions;
-      state.settings = Object.assign({ casualMultiplier: 1.5, logoUrl: '', bannerUrl: '' }, settingsRaw);
-      state.payments = payments;
-      state.fund = fund;
-      state.donations = donations;
-      resolveMe();
-      render();
+      // 1. Chỉ lấy key và updated_at để kiểm tra xem có thay đổi hay không
+      const { data: dbKeys, error: keyError } = await sb.from('bc_data').select('key, updated_at');
+      if (keyError) throw keyError;
+      
+      const modifiedKeys = [];
+      const currentTimestamps = {};
+      if (dbKeys) {
+        dbKeys.forEach(row => {
+          currentTimestamps[row.key] = row.updated_at;
+          if (row.updated_at !== state.lastUpdated[row.key]) {
+            modifiedKeys.push(row.key);
+          }
+        });
+      }
+      
+      // 2. Chỉ tải các key thực sự đã thay đổi
+      if (modifiedKeys.length > 0) {
+        const { data: updatedData, error: valError } = await sb.from('bc_data')
+          .select('key, value, updated_at')
+          .in('key', modifiedKeys);
+        if (valError) throw valError;
+        
+        const dbMap = {};
+        if (updatedData) {
+          updatedData.forEach(row => {
+            dbMap[row.key] = row.value;
+            state.lastUpdated[row.key] = row.updated_at;
+          });
+        }
+        
+        if (modifiedKeys.includes('bc_members')) state.members = dbMap['bc_members'] || [];
+        if (modifiedKeys.includes('bc_courts')) state.courts = dbMap['bc_courts'] || [];
+        if (modifiedKeys.includes('bc_sessions')) state.sessions = dbMap['bc_sessions'] || [];
+        if (modifiedKeys.includes('bc_settings')) {
+          state.settings = Object.assign({ casualMultiplier: 1.5, logoUrl: '', bannerUrl: '' }, dbMap['bc_settings'] || {});
+        }
+        if (modifiedKeys.includes('bc_payments')) state.payments = dbMap['bc_payments'] || {};
+        if (modifiedKeys.includes('bc_fund')) state.fund = dbMap['bc_fund'] || {};
+        if (modifiedKeys.includes('bc_donations')) state.donations = dbMap['bc_donations'] || [];
+        
+        resolveMe();
+        render();
+      } else {
+        // Cập nhật lại cache timestamp nếu cần
+        Object.assign(state.lastUpdated, currentTimestamps);
+      }
     } catch(e) {
       console.error('Làm mới thất bại', e);
     } finally {
       refreshing = false;
     }
   }
+  let lastActiveTime = Date.now();
+  let isIdle = false;
+  
+  function recordActivity() {
+    lastActiveTime = Date.now();
+    if (isIdle) {
+      isIdle = false;
+      console.log('User active again, resuming refresh...');
+      refreshAll();
+    }
+  }
+  
+  window.addEventListener('mousemove', recordActivity);
+  window.addEventListener('keydown', recordActivity);
+  window.addEventListener('click', recordActivity);
+  window.addEventListener('scroll', recordActivity);
+
   let autoRefreshTimer = null;
   function startAutoRefresh(){
     if (autoRefreshTimer) return;
-    autoRefreshTimer = setInterval(refreshAll, 10000);
-    document.addEventListener('visibilitychange', () => { if (!document.hidden) refreshAll(); });
-    window.addEventListener('focus', () => refreshAll());
+    
+    const refreshIfActive = () => {
+      if (document.hidden) return;
+      
+      // Nếu người dùng không hoạt động > 3 phút (180000 ms), tạm dừng polling
+      if (Date.now() - lastActiveTime > 180000) {
+        if (!isIdle) {
+          isIdle = true;
+          console.log('User is idle. Polling paused.');
+        }
+        return;
+      }
+      refreshAll();
+    };
+    
+    autoRefreshTimer = setInterval(refreshIfActive, 15000); // 15 giây kiểm tra 1 lần để giảm tải kết nối
+    
+    document.addEventListener('visibilitychange', () => {
+      if (document.hidden) {
+        if (autoRefreshTimer) {
+          clearInterval(autoRefreshTimer);
+          autoRefreshTimer = null;
+        }
+      } else {
+        recordActivity();
+        if (!autoRefreshTimer) {
+          autoRefreshTimer = setInterval(refreshIfActive, 15000);
+        }
+      }
+    });
+    window.addEventListener('focus', () => {
+      recordActivity();
+    });
   }
 
   loadAll().then(() => {
