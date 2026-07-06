@@ -391,6 +391,111 @@
   }
   async function save(key, val, attempt){
     attempt = attempt || 1;
+    
+    // Kiểm tra phân quyền truy cập thô theo Key
+    const userRole = role();
+    const isOwnerOrAdmin = userRole === 'owner' || userRole === 'admin';
+    const isR1 = userRole === 'r1';
+    
+    if (key === 'bc_settings') {
+      if (!isOwnerOrAdmin) {
+        console.error(`Từ chối ghi bc_settings: Vai trò ${userRole} không được phép.`);
+        return false;
+      }
+    } else if (key === 'bc_fund') {
+      if (!isOwnerOrAdmin && !isR1) {
+        console.error(`Từ chối ghi bc_fund: Vai trò ${userRole} không được phép.`);
+        return false;
+      }
+    } else if (key === 'bc_courts' || key === 'bc_donations') {
+      if (!isOwnerOrAdmin && !isR1) {
+        console.error(`Từ chối ghi ${key}: Vai trò ${userRole} không được phép.`);
+        return false;
+      }
+    } else if (key === 'bc_sessions') {
+      if (!state.me) {
+        console.error("Từ chối ghi bc_sessions: Không có thông tin người dùng đăng nhập.");
+        return false;
+      }
+    } else if (key === 'bc_members') {
+      if (!isOwnerOrAdmin) {
+        if (!state.me) {
+          console.error("Từ chối ghi bc_members: Không có thông tin người dùng đăng nhập.");
+          return false;
+        }
+        const original = await loadKey('bc_members', []);
+        const newVal = val || [];
+        
+        if (original.length !== newVal.length) {
+          console.error("Từ chối ghi bc_members: Chỉ có Admin/Owner mới được phép thêm/xóa thành viên.");
+          return false;
+        }
+        
+        for (let i = 0; i < original.length; i++) {
+          const orig = original[i];
+          const updatedMem = newVal.find(x => x.id === orig.id);
+          if (!updatedMem) {
+            console.error("Từ chối ghi bc_members: Không tìm thấy thành viên khớp ID.");
+            return false;
+          }
+          
+          if (userRole === 'r2') {
+            if (orig.id !== state.me.id) {
+              if (JSON.stringify(orig) !== JSON.stringify(updatedMem)) {
+                console.error("Từ chối ghi bc_members: R2 không có quyền sửa thông tin người khác.");
+                return false;
+              }
+            } else {
+              if (
+                orig.role !== updatedMem.role ||
+                orig.status !== updatedMem.status ||
+                orig.username !== updatedMem.username ||
+                orig.email !== updatedMem.email ||
+                orig.phone !== updatedMem.phone ||
+                orig.level !== updatedMem.level
+              ) {
+                console.error("Từ chối ghi bc_members: R2 cố tình thay đổi trường bị cấm.");
+                return false;
+              }
+            }
+          } else if (userRole === 'r1') {
+            if (orig.id === state.me.id) {
+              if (
+                orig.role !== updatedMem.role ||
+                orig.status !== updatedMem.status ||
+                orig.username !== updatedMem.username ||
+                orig.email !== updatedMem.email ||
+                orig.phone !== updatedMem.phone ||
+                orig.level !== updatedMem.level
+              ) {
+                console.error("Từ chối ghi bc_members: R1 cố tình thay đổi trường bị cấm của chính mình.");
+                return false;
+              }
+            } else {
+              if (
+                orig.id !== updatedMem.id ||
+                orig.name !== updatedMem.name ||
+                orig.role !== updatedMem.role ||
+                orig.status !== updatedMem.status ||
+                orig.username !== updatedMem.username ||
+                orig.email !== updatedMem.email ||
+                orig.phone !== updatedMem.phone ||
+                orig.level !== updatedMem.level ||
+                orig.avatarUrl !== updatedMem.avatarUrl ||
+                orig.password !== updatedMem.password
+              ) {
+                console.error("Từ chối ghi bc_members: R1 cố tình thay đổi trường bị cấm của thành viên khác.");
+                return false;
+              }
+            }
+          } else {
+            console.error(`Từ chối ghi bc_members: Vai trò ${userRole} không hợp lệ.`);
+            return false;
+          }
+        }
+      }
+    }
+
     if (attempt === 1) {
       showLoading('Đang ghi dữ liệu lên đám mây...');
     }
