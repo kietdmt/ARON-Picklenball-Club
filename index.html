@@ -454,6 +454,22 @@
 
   // Helper cho ghi dữ liệu có kiểm tra xung đột đồng thời (Optimistic Concurrency Control)
   async function mutateKey(key, mutator, fallbackVal) {
+    const userRole = role();
+    const isOwnerOrAdmin = userRole === 'owner' || userRole === 'admin';
+    const isR1 = userRole === 'r1';
+    
+    if (key === 'bc_settings') {
+      if (!isOwnerOrAdmin) {
+        console.error(`Từ chối ghi bc_settings: Vai trò ${userRole} không được phép.`);
+        return null;
+      }
+    } else if (key === 'bc_fund') {
+      if (!isOwnerOrAdmin && !isR1) {
+        console.error(`Từ chối ghi bc_fund: Vai trò ${userRole} không được phép.`);
+        return null;
+      }
+    }
+
     showLoading('Đang lưu dữ liệu lên đám mây...');
     const maxRetries = 3;
     for (let attempt = 1; attempt <= maxRetries; attempt++) {
@@ -544,7 +560,91 @@
     return true;
   }
   async function mutateMembers(mutator){
-    const updated = await mutateKey('bc_members', mutator, []);
+    const updated = await mutateKey('bc_members', latest => {
+      const original = latest || [];
+      const newVal = mutator(original);
+      if (newVal === null) return null;
+      
+      const userRole = role();
+      const myId = state.me ? state.me.id : null;
+      const isOwnerOrAdmin = userRole === 'owner' || userRole === 'admin';
+      
+      if (!isOwnerOrAdmin) {
+        if (!state.me) {
+          console.error("Từ chối ghi thành viên: Không có thông tin người dùng đăng nhập.");
+          return null;
+        }
+        
+        if (original.length !== newVal.length) {
+          console.error("Từ chối ghi thành viên: Chỉ có Admin/Owner mới được phép thêm/xóa thành viên.");
+          return null;
+        }
+        
+        for (let i = 0; i < original.length; i++) {
+          const orig = original[i];
+          const updatedMem = newVal.find(x => x.id === orig.id);
+          if (!updatedMem) {
+            console.error("Từ chối ghi thành viên: Không tìm thấy thành viên khớp ID.");
+            return null;
+          }
+          
+          if (userRole === 'r2') {
+            if (orig.id !== myId) {
+              if (JSON.stringify(orig) !== JSON.stringify(updatedMem)) {
+                console.error("Từ chối ghi thành viên: R2 không có quyền sửa thông tin người khác.");
+                return null;
+              }
+            } else {
+              if (
+                orig.role !== updatedMem.role ||
+                orig.status !== updatedMem.status ||
+                orig.username !== updatedMem.username ||
+                orig.email !== updatedMem.email ||
+                orig.phone !== updatedMem.phone ||
+                orig.level !== updatedMem.level
+              ) {
+                console.error("Từ chối ghi thành viên: R2 cố tình thay đổi trường bị cấm.");
+                return null;
+              }
+            }
+          } else if (userRole === 'r1') {
+            if (orig.id === myId) {
+              if (
+                orig.role !== updatedMem.role ||
+                orig.status !== updatedMem.status ||
+                orig.username !== updatedMem.username ||
+                orig.email !== updatedMem.email ||
+                orig.phone !== updatedMem.phone ||
+                orig.level !== updatedMem.level
+              ) {
+                console.error("Từ chối ghi thành viên: R1 cố tình thay đổi trường bị cấm của chính mình.");
+                return null;
+              }
+            } else {
+              if (
+                orig.id !== updatedMem.id ||
+                orig.name !== updatedMem.name ||
+                orig.role !== updatedMem.role ||
+                orig.status !== updatedMem.status ||
+                orig.username !== updatedMem.username ||
+                orig.email !== updatedMem.email ||
+                orig.phone !== updatedMem.phone ||
+                orig.level !== updatedMem.level ||
+                orig.avatarUrl !== updatedMem.avatarUrl ||
+                orig.password !== updatedMem.password
+              ) {
+                console.error("Từ chối ghi thành viên: R1 cố tình thay đổi trường bị cấm của thành viên khác.");
+                return null;
+              }
+            }
+          } else {
+            console.error(`Từ chối ghi thành viên: Vai trò ${userRole} không hợp lệ.`);
+            return null;
+          }
+        }
+      }
+      return newVal;
+    }, []);
     if (updated === null) return false;
     state.members = updated;
     resolveMe();
