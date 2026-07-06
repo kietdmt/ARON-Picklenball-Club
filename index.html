@@ -220,6 +220,46 @@
   body.dark-theme [style*="background:#FAECE7"], body.dark-theme [style*="background: #FAECE7"] { background: rgba(242, 100, 25, 0.2) !important; color: #FFF !important; }
   body.dark-theme [style*="background:#FAEEDA"], body.dark-theme [style*="background: #FAEEDA"] { background: rgba(216, 151, 60, 0.2) !important; color: #FFF !important; }
   body.dark-theme [style*="background:#F1EFE8"], body.dark-theme [style*="background: #F1EFE8"] { background: rgba(255, 255, 255, 0.05) !important; color: #FFF !important; }
+
+  /* Chuyển nền các Card sang màu tối và đổi viền tối đồng bộ */
+  body.dark-theme [style*="background: #F4F1EA"], body.dark-theme [style*="background:#F4F1EA"] { 
+    background: var(--card-bg) !important; 
+    border-color: var(--card-border) !important;
+  }
+  body.dark-theme [style*="background-color: #F4F1EA"], body.dark-theme [style*="background-color:#F4F1EA"] { 
+    background-color: var(--card-bg) !important; 
+    border-color: var(--card-border) !important;
+  }
+  body.dark-theme [style*="background: linear-gradient"], body.dark-theme [style*="background:linear-gradient"] { 
+    background: var(--card-bg) !important; 
+    border-color: var(--card-border) !important;
+  }
+  body.dark-theme [style*="border: 1px solid #F1EFE8"], body.dark-theme [style*="border:1px solid #F1EFE8"] { 
+    border-color: var(--card-border) !important; 
+  }
+  body.dark-theme [style*="border: 1px solid #E3E0D6"], body.dark-theme [style*="border:1px solid #E3E0D6"] { 
+    border-color: var(--card-border) !important; 
+  }
+
+  /* Đảo màu chữ thông minh */
+  body.dark-theme [style*="color: #1B4332"], body.dark-theme [style*="color:#1B4332"],
+  body.dark-theme [style*="color: #27500A"], body.dark-theme [style*="color:#27500A"] { 
+    color: #A7F3D0 !important; 
+  }
+  body.dark-theme [style*="color: #993C1D"], body.dark-theme [style*="color:#993C1D"] { 
+    color: #FCA5A5 !important; 
+  }
+  body.dark-theme [style*="color: #854F0B"], body.dark-theme [style*="color:#854F0B"] { 
+    color: #FFB703 !important; 
+  }
+
+  /* Thanh tiến độ tối ưu */
+  body.dark-theme [style*="background:#EFEDE3"], body.dark-theme [style*="background: #EFEDE3"] { 
+    background: rgba(255, 255, 255, 0.1) !important; 
+  }
+  body.dark-theme [style*="border-bottom:1px solid #EFEDE3"], body.dark-theme [style*="border-bottom: 1px solid #EFEDE3"] { 
+    border-bottom-color: var(--card-border) !important; 
+  }
 </style>
 
 <script>
@@ -277,7 +317,7 @@
     n = Math.round(n || 0);
     const abs = Math.abs(n).toLocaleString('vi-VN');
     if (signed) return (n >= 0 ? '+' : '-') + abs + 'đ';
-    return abs + 'đ';
+    return (n >= 0 ? '' : '-') + abs + 'đ';
   }
   function formatDate(d){ if (!d) return ''; const p = d.split('-'); return p.length === 3 ? `${p[2]}/${p[1]}/${p[0]}` : d; }
   const WEEKDAYS = ["Chủ nhật","Thứ 2","Thứ 3","Thứ 4","Thứ 5","Thứ 6","Thứ 7"];
@@ -818,7 +858,7 @@
     dialog.showModal();
   }
 
-  function showPaymentQrDialog(amount, memo) {
+  function showPaymentQrDialog(amount, memo, onConfirm) {
     let dialog = document.getElementById('payment-qr-dialog');
     if (!dialog) {
       dialog = el(`<dialog id="payment-qr-dialog" style="border:none; border-radius:16px; padding:0; max-width:440px; width:90%; box-shadow:0 20px 25px -5px rgba(0,0,0,0.1), 0 10px 10px -6px rgba(0,0,0,0.1); background:#FAF8F5; overflow:hidden;">
@@ -853,8 +893,8 @@
     content.innerHTML = '';
     
     const intro = el(`<div style="text-align:center; width:100%;">
-      <div style="font-size:14px; font-weight:600; color:#27500A; background:#EAF3DE; padding:10px; border-radius:8px; border:1px solid rgba(39,80,10,0.15); margin-bottom:12px;">
-        🎉 Gửi yêu cầu chuyển khoản thành công!
+      <div style="font-size:14px; font-weight:600; color:#0C447C; background:#E6F1FB; padding:10px; border-radius:8px; border:1px solid rgba(12,68,124,0.15); margin-bottom:12px;">
+        📲 QUÉT MÃ QR ĐỂ CHUYỂN KHOẢN
       </div>
       <div style="font-size:12px; color:#6b7a73; line-height:1.4;">
         Vui lòng quét mã QR dưới đây để thực hiện thanh toán chuyển khoản ngay:
@@ -920,9 +960,11 @@
     </div>`);
     content.appendChild(footer);
     
-    document.getElementById('pay-qr-done-btn').onclick = () => {
+    document.getElementById('pay-qr-done-btn').onclick = async () => {
       dialog.close();
-      render();
+      if (onConfirm) {
+        await onConfirm();
+      }
     };
     
     dialog.showModal();
@@ -1918,7 +1960,7 @@
         <tr style="color:#8a877d; text-align:left;">
           <th style="padding:6px 4px;">Thành viên</th><th style="padding:6px 4px;">Buổi</th>
           <th style="padding:6px 4px; text-align:right;">Phải trả</th><th style="padding:6px 4px; text-align:right;">Đã nộp</th>
-          <th style="padding:6px 4px; text-align:right;">Nộp trước</th><th style="padding:6px 4px; text-align:right;">Còn lại</th>
+          <th style="padding:6px 4px; text-align:right;">Điều chỉnh</th><th style="padding:6px 4px; text-align:right;">Còn lại</th>
         </tr>
       </table></div>`);
       const table = tbl.querySelector('table');
@@ -1933,7 +1975,7 @@
           <td style="padding:6px 4px;">${s.count}</td>
           <td style="padding:6px 4px; text-align:right;">${formatVND(s.owed)}</td>
           <td style="padding:6px 4px; text-align:right;">${canEditPaid ? `<input class="bc-input" type="number" min="0" id="paid-${m.id}" value="${p.paid||0}" style="width:90px; padding:4px 6px; text-align:right;" />` : formatVND(p.paid||0)}</td>
-          <td style="padding:6px 4px; text-align:right;">${editable ? `<input class="bc-input" type="number" min="0" id="prepaid-${m.id}" value="${p.prepaid||0}" style="width:90px; padding:4px 6px; text-align:right;" />` : formatVND(p.prepaid||0)}</td>
+          <td style="padding:6px 4px; text-align:right;">${editable ? `<input class="bc-input" type="number" id="prepaid-${m.id}" value="${p.prepaid||0}" style="width:90px; padding:4px 6px; text-align:right;" />` : (p.prepaid ? formatVND(p.prepaid, true) : '0đ')}</td>
           <td style="padding:6px 4px; text-align:right; font-weight:500; color:${remaining>0?'#993C1D':'#27500A'};">${formatVND(remaining)}</td>
         </tr>`);
         table.appendChild(tr);
@@ -1944,6 +1986,7 @@
         wrap.appendChild(saveBtn);
         setTimeout(() => {
           saveBtn.onclick = async () => {
+            const todayStr = new Date().toISOString().slice(0,10);
             const entries = {};
             rowsMembers.forEach(m => {
               const paidEl = document.getElementById(`paid-${m.id}`);
@@ -1952,7 +1995,11 @@
                 const existingPayment = (state.payments[m.id] || {})[month] || { paid: 0, prepaid: 0 };
                 const paidVal = paidEl ? (parseFloat(paidEl.value) || 0) : (existingPayment.paid || 0);
                 const prepaidVal = prepaidEl ? (parseFloat(prepaidEl.value) || 0) : (existingPayment.prepaid || 0);
-                entries[m.id] = { paid: paidVal, prepaid: prepaidVal };
+                let dateVal = existingPayment.date;
+                if (paidVal !== existingPayment.paid || prepaidVal !== existingPayment.prepaid) {
+                  dateVal = todayStr;
+                }
+                entries[m.id] = { paid: paidVal, prepaid: prepaidVal, date: dateVal };
               }
             });
             await mutatePayments(latest => {
@@ -2002,25 +2049,37 @@
         </div>
       </div>`);
       
-      const myRequests = (state.paymentRequests || []).filter(r => r.memberId === myMember.id && r.month === month);
-      if (myRequests.length > 0) {
+      const isPrivileged = canManage() || isOwner();
+      const visibleRequests = (state.paymentRequests || []).filter(r => {
+        if (r.month !== month) return false;
+        return isPrivileged || r.memberId === myMember.id;
+      });
+      if (visibleRequests.length > 0) {
         const histCard = el(`<div class="bc-card" style="margin-top:0.75rem;">
           <h4 style="font-size:14px; color:#1B4332; margin-bottom:8px;">Lịch sử yêu cầu thanh toán ${monthLabel(month)}</h4>
-          <table style="width:100%; font-size:13px; border-collapse:collapse;">
-            <tr style="color:#8a877d; text-align:left;">
-              <th style="padding:4px;">Ngày</th><th style="padding:4px; text-align:right;">Đã nộp</th><th style="padding:4px; text-align:right;">Nộp trước</th><th style="padding:4px; text-align:right;">Trạng thái</th>
-            </tr>
-          </table>
+          <div style="overflow-x:auto;">
+            <table style="width:100%; font-size:12px; border-collapse:collapse; min-width:320px;">
+              <tr style="color:#8a877d; text-align:left;">
+                <th style="padding:4px 2px; font-weight:500;">Ngày</th>
+                <th style="padding:4px 2px; font-weight:500;">Người gửi</th>
+                <th style="padding:4px 2px; font-weight:500; text-align:right;">Đã nộp</th>
+                <th style="padding:4px 2px; font-weight:500; text-align:center;">Người xác nhận</th>
+                <th style="padding:4px 2px; font-weight:500; text-align:right;">Trạng thái</th>
+              </tr>
+            </table>
+          </div>
         </div>`);
         const histTable = histCard.querySelector('table');
-        myRequests.slice().reverse().forEach(r => {
+        visibleRequests.slice().reverse().forEach(r => {
           const statusColors = { pending: ['#FAEEDA','#854F0B', 'Chờ duyệt'], approved: ['#EAF3DE','#27500A', 'Đã duyệt'], rejected: ['#FAECE7','#993C1D', 'Từ chối'] };
           const [bg, fg, label] = statusColors[r.status] || ['#F1EFE8','#444441', r.status];
+          const verifier = r.approvedBy ? escapeHtml(r.approvedBy) : '—';
           histTable.appendChild(el(`<tr style="border-top:1px solid #F1EFE8;">
-            <td style="padding:5px 4px; color:#8a877d;">${formatDate(r.date)}</td>
-            <td style="padding:5px 4px; text-align:right;">${formatVND(r.paid)}</td>
-            <td style="padding:5px 4px; text-align:right;">${formatVND(r.prepaid)}</td>
-            <td style="padding:5px 4px; text-align:right;"><span class="bc-badge" style="background:${bg}; color:${fg};">${label}</span></td>
+            <td style="padding:6px 2px; color:#8a877d; white-space:nowrap;">${formatDate(r.date)}</td>
+            <td style="padding:6px 2px; font-weight:500; max-width:80px; overflow:hidden; text-overflow:ellipsis; white-space:nowrap;">${escapeHtml(r.memberName)}</td>
+            <td style="padding:6px 2px; text-align:right; font-weight:600; color:#1B4332;">${formatVND(r.paid)}</td>
+            <td style="padding:6px 2px; text-align:center; color:#6b7a73; max-width:80px; overflow:hidden; text-overflow:ellipsis; white-space:nowrap;">${verifier}</td>
+            <td style="padding:6px 2px; text-align:right;"><span class="bc-badge" style="background:${bg}; color:${fg}; padding:2px 6px; font-size:10px;">${label}</span></td>
           </tr>`));
         });
         paymentSection.appendChild(histCard);
@@ -2048,7 +2107,7 @@
         };
         
         const submitBtn = document.getElementById('r2-submit-request-btn');
-        if (submitBtn) submitBtn.onclick = async () => {
+        if (submitBtn) submitBtn.onclick = () => {
           const r2Paid = parseFloat(document.getElementById('r2-paid').value) || 0;
           const r2Prepaid = parseFloat(document.getElementById('r2-prepaid').value) || 0;
           const note = document.getElementById('r2-note').value.trim();
@@ -2061,46 +2120,38 @@
           }
           if (r2Prepaid < (p.prepaid || 0)) {
             msg.style.color = '#993C1D';
-            msg.textContent = `Số tiền nộp trước không được nhỏ hơn số tiền đã xác nhận hiện tại (${formatVND(p.prepaid)}).`;
+            msg.textContent = `Số tiền điều chỉnh không được nhỏ hơn số tiền đã xác nhận hiện tại (${formatVND(p.prepaid)}).`;
             return;
           }
           
-          submitBtn.disabled = true;
-          msg.style.color = '#6b7a73';
-          msg.textContent = 'Đang gửi yêu cầu...';
+          msg.textContent = '';
+          const transferAmount = Math.max(0, (r2Paid - (p.paid || 0)) + (r2Prepaid - (p.prepaid || 0)));
           
-          const ok = await mutatePaymentRequests(latest => {
-            const list = Array.isArray(latest) ? latest : [];
-            const newRequest = {
-              id: uid(),
-              memberId: myMember.id,
-              memberName: myMember.name,
-              month,
-              paid: r2Paid,
-              prepaid: r2Prepaid,
-              status: 'pending',
-              note,
-              date: today
-            };
-            return list.concat([newRequest]);
+          showPaymentQrDialog(transferAmount, note, async () => {
+            showLoading('Đang gửi yêu cầu xác nhận chuyển tiền...');
+            const ok = await mutatePaymentRequests(latest => {
+              const list = Array.isArray(latest) ? latest : [];
+              const newRequest = {
+                id: uid(),
+                memberId: myMember.id,
+                memberName: myMember.name,
+                month,
+                paid: r2Paid,
+                prepaid: r2Prepaid,
+                status: 'pending',
+                note,
+                date: today
+              };
+              return list.concat([newRequest]);
+            });
+            hideLoading();
+            if (ok) {
+              alert('Gửi yêu cầu chuyển tiền thành công! Vui lòng đợi Admin phê duyệt.');
+            } else {
+              alert('Có lỗi xảy ra khi gửi yêu cầu, vui lòng thử lại.');
+            }
+            render();
           });
-          
-          if (ok) {
-            msg.style.color = '#27500A';
-            msg.textContent = 'Gửi yêu cầu chuyển khoản thành công! Đang tạo mã QR...';
-            
-            const transferAmount = Math.max(0, (r2Paid - (p.paid || 0)) + (r2Prepaid - (p.prepaid || 0)));
-            
-            setTimeout(() => {
-              submitBtn.disabled = false;
-              msg.textContent = '';
-              showPaymentQrDialog(transferAmount, note);
-            }, 800);
-          } else {
-            submitBtn.disabled = false;
-            msg.style.color = '#993C1D';
-            msg.textContent = 'Có lỗi xảy ra khi gửi yêu cầu, vui lòng thử lại.';
-          }
         };
       }, 0);
     }
@@ -2230,8 +2281,26 @@
     const ledgerEntries = [];
     state.members.forEach(m => {
       const p = (state.payments[m.id] || {})[month] || {};
-      if (p.paid) ledgerEntries.push({ date: month+'-01', type: 'income', label: 'Thu tiền nộp: ' + m.name, amount: p.paid });
-      if (p.prepaid) ledgerEntries.push({ date: month+'-01', type: 'income', label: 'Nộp trước: ' + m.name, amount: p.prepaid });
+      
+      let payDate = p.date;
+      if (!payDate) {
+        const approvedReq = (state.paymentRequests || []).find(r => r.memberId === m.id && r.month === month && r.status === 'approved');
+        if (approvedReq) {
+          payDate = approvedReq.date;
+        }
+      }
+      if (!payDate) {
+        payDate = month + '-01';
+      }
+
+      if (p.paid) ledgerEntries.push({ date: payDate, type: 'income', label: 'Thu tiền nộp: ' + m.name, amount: p.paid });
+      if (p.prepaid) {
+        if (p.prepaid > 0) {
+          ledgerEntries.push({ date: payDate, type: 'income_adj_plus', label: 'Điều chỉnh tăng: ' + m.name, amount: p.prepaid });
+        } else if (p.prepaid < 0) {
+          ledgerEntries.push({ date: payDate, type: 'income_adj_minus', label: 'Điều chỉnh giảm: ' + m.name, amount: Math.abs(p.prepaid) });
+        }
+      }
     });
     monthDonations.forEach(d => ledgerEntries.push({ date: d.date||month+'-01', type: 'income', label: 'Donate: ' + d.memberName + (d.note?' ('+d.note+')':''), amount: d.amount }));
     (f.expenses||[]).forEach(e => ledgerEntries.push({ date: e.date||month+'-01', type: 'expense', label: e.category + (e.label?' · '+e.label:''), amount: e.amount }));
@@ -2241,11 +2310,19 @@
       const ledger = el(`<div class="bc-card"><div style="font-size:13px; font-weight:500; color:#1B4332; margin-bottom:6px;">Sổ thu/chi tháng ${monthLabel(month)}</div></div>`);
       const ltbl = el(`<table style="width:100%; font-size:13px; border-collapse:collapse;"><tr style="color:#8a877d; font-size:12px;"><th style="padding:4px; text-align:left;">Ngày</th><th style="padding:4px; text-align:left;">Nội dung</th><th style="padding:4px; text-align:right;">Số tiền</th></tr></table>`);
       ledgerEntries.forEach(e => {
-        const inc = e.type === 'income';
+        let prefix = '';
+        let color = '#222';
+        if (e.type === 'income' || e.type === 'income_adj_plus') {
+          prefix = '+';
+          color = '#222';
+        } else if (e.type === 'expense' || e.type === 'income_adj_minus') {
+          prefix = '-';
+          color = '#993C1D';
+        }
         ltbl.appendChild(el(`<tr style="border-top:1px solid #F1EFE8;">
-          <td style="padding:5px 4px; color:#8a877d; white-space:nowrap;">${e.date}</td>
+          <td style="padding:5px 4px; color:#8a877d; white-space:nowrap;">${formatDate(e.date)}</td>
           <td style="padding:5px 4px;">${escapeHtml(e.label)}</td>
-          <td style="padding:5px 4px; text-align:right; font-weight:500; color:${inc?'#222':'#993C1D'};">${inc?'+':'-'}${formatVND(e.amount)}</td>
+          <td style="padding:5px 4px; text-align:right; font-weight:500; color:${color};">${prefix}${formatVND(e.amount)}</td>
         </tr>`));
       });
       ledger.appendChild(ltbl);
@@ -2256,7 +2333,7 @@
       const expList = el(`<div class="bc-card"><div style="font-size:13px; font-weight:500; color:#1B4332; margin-bottom:6px;">Khoản chi trong tháng</div></div>`);
       (f.expenses||[]).forEach(e => {
         const row = el(`<div style="display:flex; justify-content:space-between; align-items:center; padding:4px 0; border-top:1px solid #F1EFE8; font-size:13px;">
-          <span>${e.date?`<span style="color:#8a877d;">${e.date} · </span>`:''}${escapeHtml(e.category)}${e.label?' · '+escapeHtml(e.label):''}</span>
+          <span>${e.date?`<span style="color:#8a877d;">${formatDate(e.date)} · </span>`:''}${escapeHtml(e.category)}${e.label?' · '+escapeHtml(e.label):''}</span>
           <span style="display:flex; align-items:center; gap:8px;">
             <strong style="color:#993C1D;">-${formatVND(e.amount)}</strong>
             ${canDelete()?`<button class="bc-btn danger small" data-id="${e.id}">Xoá</button>`:''}
@@ -2283,7 +2360,7 @@
         <div style="display:flex; gap:16px; flex-wrap:wrap; align-items:baseline;">
           <span style="color:#6b7a73;">Tồn đầu: <strong style="color:#1B4332;">${formatVND(closing.opening)}</strong></span>
           <span style="color:#6b7a73;">Thu nộp: <strong style="color:#222;">+${formatVND(closing.incomePaid)}</strong></span>
-          <span style="color:#6b7a73;">Nộp trước: <strong style="color:#222;">+${formatVND(closing.incomePrepaid)}</strong></span>
+          <span style="color:#6b7a73;">Nộp trước/ĐC: <strong style="color:#222;">${formatVND(closing.incomePrepaid, true)}</strong></span>
           <span style="color:#6b7a73;">Donate: <strong style="color:#222;">+${formatVND(closing.incomeDonate)}</strong></span>
           <span style="color:#6b7a73;">Chi: <strong style="color:#993C1D;">-${formatVND(closing.expenseTotal)}</strong></span>
           <span style="color:#6b7a73; font-size:14px;">Tồn cuối: <strong style="color:#1B4332; font-size:15px;">${formatVND(closing.closing)}</strong></span>
@@ -2358,14 +2435,14 @@
           document.getElementById(`approve-req-${r.id}`).onclick = async () => {
             const reqOk = await mutatePaymentRequests(latest => {
               const list = Array.isArray(latest) ? latest : [];
-              return list.map(x => x.id === r.id ? Object.assign({}, x, { status: 'approved' }) : x);
+              return list.map(x => x.id === r.id ? Object.assign({}, x, { status: 'approved', approvedBy: state.me.name }) : x);
             });
             if (!reqOk) { alert('Lỗi duyệt yêu cầu.'); return; }
             
             await mutatePayments(latest => {
               const updated = Object.assign({}, latest);
               updated[r.memberId] = Object.assign({}, updated[r.memberId] || {});
-              updated[r.memberId][r.month] = { paid: r.paid, prepaid: r.prepaid };
+              updated[r.memberId][r.month] = { paid: (r.paid || 0) + (r.prepaid || 0), prepaid: 0, date: new Date().toISOString().slice(0,10) };
               return updated;
             });
             
@@ -2376,7 +2453,7 @@
             if (!confirm(`Từ chối yêu cầu chuyển khoản của ${r.memberName}?`)) return;
             await mutatePaymentRequests(latest => {
               const list = Array.isArray(latest) ? latest : [];
-              return list.map(x => x.id === r.id ? Object.assign({}, x, { status: 'rejected' }) : x);
+              return list.map(x => x.id === r.id ? Object.assign({}, x, { status: 'rejected', approvedBy: state.me.name }) : x);
             });
             render();
           };
@@ -3499,7 +3576,21 @@
     }
 
     const voteTable = card.querySelector(`#vote-table-${s.id}`);
-    voteTable.appendChild(el(`<div style="font-size:13px; font-weight:500; color:#1B4332; margin-bottom:6px;">Bảng vote</div>`));
+    state.showAllVotes = state.showAllVotes || {};
+    const showAll = !!state.showAllVotes[s.id];
+    
+    const voteTitleRow = el(`<div style="display:flex; justify-content:space-between; align-items:center; margin-bottom:6px;">
+      <div style="font-size:13px; font-weight:500; color:#1B4332;">Bảng vote</div>
+    </div>`);
+    if (s.locked) {
+      const toggleBtn = el(`<button class="bc-btn outline small" style="padding:2px 8px; font-size:11px; color:#6b7a73; border-color:#d8d4c6; font-family:'Outfit', sans-serif;">${showAll ? '🙈 Ẩn vắng/chưa vote' : '👁️ Hiện vắng/chưa vote'}</button>`);
+      toggleBtn.onclick = () => {
+        state.showAllVotes[s.id] = !showAll;
+        render();
+      };
+      voteTitleRow.appendChild(toggleBtn);
+    }
+    voteTable.appendChild(voteTitleRow);
     if (state.members.length === 0) {
       voteTable.appendChild(el(`<div style="font-size:13px; color:#8a877d;">Chưa có thành viên nào.</div>`));
     } else {
@@ -3539,8 +3630,11 @@
         const notVoted = !v;
         const isAbsent = v === 'no';
 
-        // Khi buổi đã chốt: ẩn thành viên chưa vote hoặc vắng (và không pass)
-        if (s.locked && (notVoted || isAbsent) && !hasPassed) { hiddenCount++; return; }
+        // Khi buổi đã chốt: ẩn thành viên chưa vote hoặc vắng (và không pass) nếu thu gọn
+        if (s.locked && (notVoted || isAbsent) && !hasPassed) {
+          hiddenCount++;
+          if (!showAll) return;
+        }
 
         const isReceiver = Object.values(passes).includes(m.id);
         let statusBadge = '';
@@ -3605,8 +3699,8 @@
         </tr>`));
       });
       voteTable.appendChild(tbl);
-      if (s.locked && hiddenCount > 0) {
-        voteTable.appendChild(el(`<div style="font-size:12px; color:#8a877d; margin-top:6px; font-style:italic;">🔒 Đã ẩn ${hiddenCount} thành viên chưa vote hoặc vắng (buổi đã chốt). Mở chốt để hiển thị lại.</div>`));
+      if (s.locked && !showAll && hiddenCount > 0) {
+        voteTable.appendChild(el(`<div style="font-size:12px; color:#8a877d; margin-top:6px; font-style:italic;">🔒 Đã ẩn ${hiddenCount} thành viên chưa vote hoặc vắng (buổi đã chốt). Nhấp 'Hiện vắng/chưa vote' ở trên để xem.</div>`));
       }
 
       setTimeout(() => {
