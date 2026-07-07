@@ -40,7 +40,7 @@
   }
   
   body.dark-theme {
-    --bg-gradient: linear-gradient(135deg, #0A192F 0%, #020C1B 100%);
+    --bg-gradient: linear-gradient(135deg, #0A2146 0%, #030C1E 100%);
     --card-bg: rgba(16, 28, 48, 0.88);
     --card-border: rgba(112, 162, 216, 0.2);
     --card-hover-border: #F26419;
@@ -472,20 +472,16 @@
                 return false;
               }
             } else {
-              if (
-                orig.id !== updatedMem.id ||
-                orig.name !== updatedMem.name ||
-                orig.role !== updatedMem.role ||
-                orig.status !== updatedMem.status ||
-                orig.username !== updatedMem.username ||
-                orig.email !== updatedMem.email ||
-                orig.phone !== updatedMem.phone ||
-                orig.level !== updatedMem.level ||
-                orig.avatarUrl !== updatedMem.avatarUrl ||
-                orig.password !== updatedMem.password
-              ) {
-                console.error("Từ chối ghi bc_members: R1 cố tình thay đổi trường bị cấm của thành viên khác.");
-                return false;
+              if (orig.role === 'admin' || orig.role === 'owner') {
+                if (JSON.stringify(orig) !== JSON.stringify(updatedMem)) {
+                  console.error("Từ chối ghi bc_members: R1 không được quyền sửa đổi thông tin của Admin/Owner.");
+                  return false;
+                }
+              } else {
+                if (orig.role !== updatedMem.role) {
+                  console.error("Từ chối ghi bc_members: R1 không được phép phân quyền thành viên.");
+                  return false;
+                }
               }
             }
           } else {
@@ -726,20 +722,16 @@
                 return null;
               }
             } else {
-              if (
-                orig.id !== updatedMem.id ||
-                orig.name !== updatedMem.name ||
-                orig.role !== updatedMem.role ||
-                orig.status !== updatedMem.status ||
-                orig.username !== updatedMem.username ||
-                orig.email !== updatedMem.email ||
-                orig.phone !== updatedMem.phone ||
-                orig.level !== updatedMem.level ||
-                orig.avatarUrl !== updatedMem.avatarUrl ||
-                orig.password !== updatedMem.password
-              ) {
-                console.error("Từ chối ghi thành viên: R1 cố tình thay đổi trường bị cấm của thành viên khác.");
-                return null;
+              if (orig.role === 'admin' || orig.role === 'owner') {
+                if (JSON.stringify(orig) !== JSON.stringify(updatedMem)) {
+                  console.error("Từ chối ghi thành viên: R1 không được quyền sửa đổi thông tin của Admin/Owner.");
+                  return null;
+                }
+              } else {
+                if (orig.role !== updatedMem.role) {
+                  console.error("Từ chối ghi thành viên: R1 không được phép phân quyền thành viên.");
+                  return null;
+                }
               }
             }
           } else {
@@ -1179,14 +1171,13 @@
   function renderAuth(){
     const wrap = el(`<div style="max-width:420px; margin:1.5rem auto;"></div>`);
 
-    const bannerUrl = state.settings.bannerUrl || 'pickleball_banner.jpg';
-    wrap.appendChild(el(`<img src="${bannerUrl}" style="width:100%; height:130px; object-fit:cover; border-radius:16px; margin-bottom:12px; box-shadow: 0 4px 15px rgba(27,67,50,0.15);" />`));
+    const bannerUrl = state.settings.bannerUrl || 'aron_banner.jpg';
+    wrap.appendChild(el(`<img src="${bannerUrl}" style="width:100%; height:130px; object-fit:cover; border-radius:16px; margin-bottom:12px; box-shadow: 0 4px 15px rgba(11,79,154,0.15);" />`));
 
     const head = el(`<div style="text-align:center; margin-bottom:1rem;"></div>`);
-    if (state.settings.logoUrl) {
-      head.appendChild(el(`<img src="${state.settings.logoUrl}" style="width:64px; height:64px; object-fit:cover; border-radius:50%; margin-bottom:8px;" />`));
-    }
-    head.appendChild(el(`<h1 style="font-size:20px; color:#1B4332;">Hội Pickleball</h1>`));
+    const logoUrl = state.settings.logoUrl || 'aron_logo.jpg';
+    head.appendChild(el(`<img src="${logoUrl}" style="width:64px; height:64px; object-fit:cover; border-radius:50%; margin-bottom:8px; box-shadow:0 2px 8px rgba(0,0,0,0.15);" />`));
+    head.appendChild(el(`<h1 style="font-size:20px; color:#0A2540;">ARON Pickleball Club</h1>`));
     head.appendChild(el(`<p style="font-size:13px; color:#8a877d; margin-top:4px;">Đăng nhập bằng email và mật khẩu để vote, đăng ký lịch và xem chi phí.</p>`));
     
     const activeCount = state.members.filter(m=>m.status==='active').length;
@@ -1443,10 +1434,14 @@
   function renderHeader(){
     const [bg, fg] = ROLE_COLOR[state.me.role] || ["#F1EFE8","#444441"];
     const isDark = document.body.classList.contains('dark-theme');
+    const logoUrl = state.settings.logoUrl || 'aron_logo.jpg';
     const wrap = el(`<div style="display:flex; align-items:center; justify-content:space-between; margin-bottom:1rem; flex-wrap:wrap; gap:8px;">
-      <div>
-        <h1 style="font-size:20px; color:#1B4332;">Hội Pickleball</h1>
-        <p style="font-size:13px; color:#8a877d; margin:2px 0 0;">${state.members.filter(m=>m.status==='active').length}/${MAX_MEMBERS} thành viên hoạt động · ${state.courts.length} sân đã lưu</p>
+      <div style="display:flex; align-items:center; gap:10px;">
+        <img src="${logoUrl}" style="width:40px; height:40px; object-fit:cover; border-radius:50%; box-shadow:0 1px 4px rgba(0,0,0,0.15);" />
+        <div>
+          <h1 style="font-size:20px; color:#0A2540; margin:0; line-height:1.2;">ARON Pickleball Club</h1>
+          <p style="font-size:13px; color:#8a877d; margin:2px 0 0;">${state.members.filter(m=>m.status==='active').length}/${MAX_MEMBERS} thành viên hoạt động · ${state.courts.length} sân đã lưu</p>
+        </div>
       </div>
       <div style="display:flex; align-items:center; gap:8px;">
         <span class="bc-badge" style="background:${bg}; color:${fg};">${escapeHtml(state.me.name)} · ${ROLE_LABEL[state.me.role]}</span>
@@ -2173,14 +2168,14 @@
         const s = summary[m.id] || { count: 0, owed: 0 };
         const p = (state.payments[m.id] || {})[month] || { paid: 0, prepaid: 0 };
         const remaining = s.owed - (p.paid||0) - (p.prepaid||0);
-        const editable = canManage();
+        const canEditPrepaid = role() === 'admin' || isOwner();
         const canEditPaid = isOwner();
         const tr = el(`<tr style="border-top:1px solid #F1EFE8;">
           <td style="padding:6px 4px;">${escapeHtml(m.name)}</td>
           <td style="padding:6px 4px;">${s.count}</td>
           <td style="padding:6px 4px; text-align:right;">${formatVND(s.owed)}</td>
           <td style="padding:6px 4px; text-align:right;">${canEditPaid ? `<input class="bc-input" type="number" min="0" id="paid-${m.id}" value="${p.paid||0}" style="width:90px; padding:4px 6px; text-align:right;" />` : formatVND(p.paid||0)}</td>
-          <td style="padding:6px 4px; text-align:right;">${editable ? `<input class="bc-input" type="number" id="prepaid-${m.id}" value="${p.prepaid||0}" style="width:90px; padding:4px 6px; text-align:right;" />` : (p.prepaid ? formatVND(p.prepaid, true) : '0đ')}</td>
+          <td style="padding:6px 4px; text-align:right;">${canEditPrepaid ? `<input class="bc-input" type="number" id="prepaid-${m.id}" value="${p.prepaid||0}" style="width:90px; padding:4px 6px; text-align:right;" />` : (p.prepaid ? formatVND(p.prepaid, true) : '0đ')}</td>
           <td style="padding:6px 4px; text-align:right; font-weight:500; color:${remaining>0?'#993C1D':'#27500A'};">${formatVND(remaining)}</td>
         </tr>`);
         table.appendChild(tr);
@@ -2628,8 +2623,10 @@
               <div style="font-size:11px; color:#8a877d;">Ngày gửi: ${formatDate(r.date)}</div>
             </div>
             <div style="display:flex; gap:6px;">
-              <button class="bc-btn small" style="background:#27500A; border-color:#27500A;" id="approve-req-${r.id}">Duyệt</button>
-              <button class="bc-btn danger small" id="reject-req-${r.id}">Từ chối</button>
+              ${role() !== 'r1' ? `
+                <button class="bc-btn small" style="background:#27500A; border-color:#27500A;" id="approve-req-${r.id}">Duyệt</button>
+                <button class="bc-btn danger small" id="reject-req-${r.id}">Từ chối</button>
+              ` : `<span style="font-size:12px; color:#8a877d; font-style:italic;">Chế độ xem (R1)</span>`}
             </div>
           </div>
         </div>`);
@@ -2671,27 +2668,28 @@
     }
 
     // 2. Cấu hình tài khoản nhận tiền
+    const isR1 = role() === 'r1';
     const configSection = el(`<div class="bc-card">
       <h3 style="font-size:15px; color:#1B4332; margin-bottom:8px;">Cấu hình tài khoản nhận tiền (VietQR)</h3>
       <div style="display:flex; flex-direction:column; gap:8px;">
         <div>
           <label style="font-size:12px; color:#8a877d; display:block; margin-bottom:4px;">Mã ngân hàng (VietQR - ví dụ: VCB, MB, TCB, ACB,...):</label>
-          <input class="bc-input" id="cfg-bank-id" value="${escapeHtml(bankId)}" placeholder="Nhập mã ngân hàng (ví dụ: VCB)" />
+          <input class="bc-input" id="cfg-bank-id" value="${escapeHtml(bankId)}" placeholder="Nhập mã ngân hàng (ví dụ: VCB)" ${isR1 ? 'disabled style="opacity:0.75;"' : ''} />
         </div>
         <div>
           <label style="font-size:12px; color:#8a877d; display:block; margin-bottom:4px;">Số tài khoản ngân hàng:</label>
-          <input class="bc-input" id="cfg-account-no" value="${escapeHtml(accountNo)}" placeholder="Nhập số tài khoản" />
+          <input class="bc-input" id="cfg-account-no" value="${escapeHtml(accountNo)}" placeholder="Nhập số tài khoản" ${isR1 ? 'disabled style="opacity:0.75;"' : ''} />
         </div>
         <div>
           <label style="font-size:12px; color:#8a877d; display:block; margin-bottom:4px;">Họ và tên chủ tài khoản (không dấu):</label>
-          <input class="bc-input" id="cfg-account-name" value="${escapeHtml(accountName)}" placeholder="Nhập tên chủ tài khoản" />
+          <input class="bc-input" id="cfg-account-name" value="${escapeHtml(accountName)}" placeholder="Nhập tên chủ tài khoản" ${isR1 ? 'disabled style="opacity:0.75;"' : ''} />
         </div>
         <div style="border-top:1px dashed #E3E0D6; padding-top:8px; margin-top:4px;">
           <label style="font-size:12px; color:#8a877d; display:block; margin-bottom:4px;">Hoặc tải lên ảnh QR tĩnh (nếu không tạo VietQR động):</label>
           ${qrUrl ? `<img src="${qrUrl}" style="max-width:140px; border-radius:8px; display:block; margin-bottom:6px;" />` : ''}
-          <input type="file" accept="image/*" id="cfg-qr-file" style="font-size:12px;" />
+          <input type="file" accept="image/*" id="cfg-qr-file" style="font-size:12px;" ${isR1 ? 'disabled style="opacity:0.75;"' : ''} />
         </div>
-        <button class="bc-btn small" id="cfg-save-btn" style="align-self:flex-start; margin-top:4px;">Lưu cấu hình nhận tiền</button>
+        ${isR1 ? '' : `<button class="bc-btn small" id="cfg-save-btn" style="align-self:flex-start; margin-top:4px;">Lưu cấu hình nhận tiền</button>`}
         <span id="cfg-save-msg" style="font-size:12px; margin-top:2px;"></span>
       </div>
     </div>`);
