@@ -30,6 +30,7 @@
     --tab-hover-bg: rgba(112, 162, 216, 0.15);
     --card-shadow: 0 6px 20px -4px rgba(13, 32, 64, 0.06), 0 3px 6px -2px rgba(0, 0, 0, 0.02);
     --card-hover-shadow: 0 12px 30px -4px rgba(13, 32, 64, 0.12), 0 5px 12px -2px rgba(0, 0, 0, 0.04);
+    --self-row-bg: rgba(242, 100, 25, 0.07);
     
     background: var(--bg-gradient);
     min-height: 100vh;
@@ -54,6 +55,7 @@
     --tab-hover-bg: rgba(112, 162, 216, 0.1);
     --card-shadow: 0 6px 20px -4px rgba(0, 0, 0, 0.4), 0 3px 6px -2px rgba(0, 0, 0, 0.3);
     --card-hover-shadow: 0 12px 30px -4px rgba(0, 0, 0, 0.6), 0 5px 12px -2px rgba(0, 0, 0, 0.4);
+    --self-row-bg: rgba(242, 100, 25, 0.15);
   }
 
   #app * { box-sizing: border-box; }
@@ -3832,6 +3834,7 @@
       const tbl = el(`<table style="width:100%; font-size:13px; border-collapse:collapse;"></table>`);
       let hiddenCount = 0;
       displayMembers.forEach(m => {
+        const isSelfRow = state.me && state.me.id === m.id;
         const v = s.votes[m.name];
         const t = memberType(m.name, mKey);
         const hasPassed = t === 'fixed' && passes[m.id];
@@ -3896,9 +3899,9 @@
 
         const nameLabel = m.isDeleted
           ? `${escapeHtml(m.name)} <span style="font-size:11px; color:#993C1D; font-style:italic;">(Đã xoá)</span>`
-          : escapeHtml(m.name);
+          : (isSelfRow ? `${escapeHtml(m.name)} <span style="font-size:11px; color:#F26419; font-weight:600;">(Bạn)</span>` : escapeHtml(m.name));
 
-        tbl.appendChild(el(`<tr style="border-top:1px solid #F1EFE8;">
+        tbl.appendChild(el(`<tr style="border-top:1px solid #F1EFE8; ${isSelfRow ? 'background:var(--self-row-bg); font-weight:600;' : ''}">
           <td style="padding:5px 4px; width:30px;">${avatarHtml(m, 26)}</td>
           <td style="padding:5px 4px;">${nameLabel}</td>
           <td style="padding:5px 4px; color:#8a877d;">${t === 'fixed' ? 'Cố định' : 'Vãng lai'}</td>
