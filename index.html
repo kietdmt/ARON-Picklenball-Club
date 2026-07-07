@@ -2326,6 +2326,11 @@
           
           msg.textContent = '';
           const transferAmount = Math.max(0, (r2Paid - (p.paid || 0)) + (r2Prepaid - (p.prepaid || 0)));
+          if (transferAmount <= 0) {
+            msg.style.color = '#993C1D';
+            msg.textContent = 'Số tiền chuyển khoản bổ sung phải lớn hơn 0đ.';
+            return;
+          }
           
           showPaymentQrDialog(transferAmount, note, async () => {
             showLoading('Đang gửi yêu cầu xác nhận chuyển tiền...');
