@@ -285,6 +285,33 @@
   function escapeHtml(s){ return (s||'').replace(/[&<>"']/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c])); }
   function normEmail(e){ return (e||'').trim().toLowerCase(); }
   function normUsername(u){ return (u||'').trim().toLowerCase().replace(/\s+/g,''); }
+  function compressImage(file, maxDim, quality, cb) {
+    const r = new FileReader();
+    r.onload = (ev) => {
+      const img = new Image();
+      img.onload = () => {
+        const canvas = document.createElement('canvas');
+        let w = img.width;
+        let h = img.height;
+        if (w > maxDim || h > maxDim) {
+          if (w > h) {
+            h = Math.round((h * maxDim) / w);
+            w = maxDim;
+          } else {
+            w = Math.round((w * maxDim) / h);
+            h = maxDim;
+          }
+        }
+        canvas.width = w;
+        canvas.height = h;
+        const ctx = canvas.getContext('2d');
+        ctx.drawImage(img, 0, 0, w, h);
+        cb(canvas.toDataURL('image/jpeg', quality));
+      };
+      img.src = ev.target.result;
+    };
+    r.readAsDataURL(file);
+  }
   function removeVietnameseTones(str) {
     if (!str) return '';
     str = str.replace(/à|á|ạ|ả|ã|â|ầ|ấ|ậ|ẩ|ẫ|ă|ằ|ắ|ặ|ẳ|ẵ/g, "a");
@@ -1528,6 +1555,7 @@
       </div>
       <div style="display:flex; align-items:center; gap:8px;">
         <span class="bc-badge" style="background:${bg}; color:${fg};">${escapeHtml(state.me.name)} · ${ROLE_LABEL[state.me.role]}</span>
+        <button class="bc-btn outline small" id="bc-sync" title="Đồng bộ dữ liệu tức thời">🔄 Đồng bộ</button>
         <button class="bc-btn outline small" id="bc-theme-toggle" title="Đổi giao diện Sáng/Tối">${isDark ? '☀️ Sáng' : '🌙 Tối'}</button>
         <button class="bc-btn outline small" id="bc-logout">Đăng xuất</button>
       </div>
@@ -1547,6 +1575,21 @@
           lsSet('bc_theme', darkActive ? 'dark' : 'light');
           themeToggle.textContent = darkActive ? '☀️ Sáng' : '🌙 Tối';
           render();
+        };
+      }
+
+      const syncBtn = document.getElementById('bc-sync');
+      if (syncBtn) {
+        syncBtn.onclick = async () => {
+          syncBtn.disabled = true;
+          const originalText = syncBtn.textContent;
+          syncBtn.textContent = '🔄 Đang đồng bộ...';
+          await refreshAll();
+          syncBtn.textContent = '✅ Đã đồng bộ';
+          setTimeout(() => {
+            syncBtn.textContent = originalText;
+            syncBtn.disabled = false;
+          }, 1500);
         };
       }
     }, 0);
@@ -2816,15 +2859,12 @@
       const cfgQrFile = document.getElementById('cfg-qr-file');
       if (cfgQrFile) cfgQrFile.onchange = (e) => {
         const f = e.target.files[0]; if (!f) return;
-        if (f.size > 1500000) { alert('Chọn ảnh nhẹ hơn ~1.5MB.'); return; }
-        const reader = new FileReader();
-        reader.onload = async () => {
+        compressImage(f, 400, 0.7, async (url) => {
           if (!state.settings.payment) state.settings.payment = {};
-          state.settings.payment.qrUrl = reader.result;
+          state.settings.payment.qrUrl = url;
           await saveSettings();
           render();
-        };
-        reader.readAsDataURL(f);
+        });
       };
     }, 0);
 
@@ -3602,14 +3642,13 @@
       wrap.appendChild(brandCard);
 
       setTimeout(() => {
-        const toDataUrl = (file, cb) => { const r = new FileReader(); r.onload = () => cb(r.result); r.readAsDataURL(file); };
         document.getElementById('brand-logo-input').onchange = (e) => {
           const f = e.target.files[0]; if (!f) return;
-          toDataUrl(f, (url) => { state.settings.logoUrl = url; saveSettings(); render(); });
+          compressImage(f, 150, 0.7, (url) => { state.settings.logoUrl = url; saveSettings(); render(); });
         };
         document.getElementById('brand-banner-input').onchange = (e) => {
           const f = e.target.files[0]; if (!f) return;
-          toDataUrl(f, (url) => { state.settings.bannerUrl = url; saveSettings(); render(); });
+          compressImage(f, 800, 0.7, (url) => { state.settings.bannerUrl = url; saveSettings(); render(); });
         };
       }, 0);
 
@@ -4322,7 +4361,7 @@
       refreshAll();
     };
     
-    autoRefreshTimer = setInterval(refreshIfActive, 15000); // 15 giây kiểm tra 1 lần để giảm tải kết nối
+    autoRefreshTimer = setInterval(refreshIfActive, 120000); // 2 phút kiểm tra 1 lần để giảm tải kết nối
     
     document.addEventListener('visibilitychange', () => {
       if (document.hidden) {
@@ -4333,7 +4372,7 @@
       } else {
         recordActivity();
         if (!autoRefreshTimer) {
-          autoRefreshTimer = setInterval(refreshIfActive, 15000);
+          autoRefreshTimer = setInterval(refreshIfActive, 120000);
         }
       }
     });
